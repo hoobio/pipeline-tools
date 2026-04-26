@@ -19,7 +19,9 @@ inputs:
     required: false
     default: wack-report.xml
   exclusions-path:
-    description: Optional path to a JSON exclusions list ([{ "test": "...", "reason": "..." }, ...]).
+    description: |
+      Optional path to a JSON exclusions list. Each entry is an object with a `test`
+      field (the WACK test name) and a `reason` field explaining why it's excluded.
     required: false
     default: ''
   summary-path:
