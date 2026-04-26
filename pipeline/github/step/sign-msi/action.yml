@@ -1,0 +1,39 @@
+name: Sign MSI packages with signtool
+description: >
+  Imports a base64-encoded PFX into the user's certificate store, locates the newest
+  x64 `signtool.exe` from the Windows SDK, and signs every `.msi` under
+  `packages-path` with the supplied thumbprint. Use after `build-msi-wix`.
+
+  The PFX import is scoped to `Cert:\CurrentUser\My`; on a runner that's discarded
+  after the job, this is the right scope.
+
+inputs:
+  pfx-base64:
+    description: Base64-encoded PFX certificate (typically from a secret).
+    required: true
+  pfx-password:
+    description: Password for the PFX.
+    required: true
+  thumbprint:
+    description: SHA1 thumbprint (40 hex characters) of the certificate to sign with.
+    required: true
+  packages-path:
+    description: Directory containing one or more .msi files (subdirectories searched).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Sign MSI
+      shell: pwsh
+      env:
+        PFX_BASE64: ${{ inputs.pfx-base64 }}
+        PFX_PASSWORD: ${{ inputs.pfx-password }}
+        THUMBPRINT: ${{ inputs.thumbprint }}
+        PACKAGES_PATH: ${{ inputs.packages-path }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/msi/Invoke-MsiSigning.ps1" `
+          -PfxBase64 $env:PFX_BASE64 `
+          -PfxPassword $env:PFX_PASSWORD `
+          -Thumbprint $env:THUMBPRINT `
+          -PackagesPath $env:PACKAGES_PATH

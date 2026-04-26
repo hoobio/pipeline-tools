@@ -1,0 +1,60 @@
+name: Build MSI with WiX 5
+description: >
+  Installs the WiX 5 dotnet tool and runs `wix build` against a `.wxs` source,
+  producing a single `.msi` per platform under `output-dir`. The `.wxs` should
+  reference the preprocessor variables `Version`, `Platform`, and `PayloadDir`,
+  which the script supplies based on the matching inputs.
+
+inputs:
+  wix-source-path:
+    description: Path to the WiX `.wxs` source file.
+    required: true
+  version:
+    description: Three- or four-part version string (e.g. `1.2.3` or `1.2.3.0`).
+    required: true
+  platform:
+    description: Target architecture (`x64`, `ARM64`, or `x86`).
+    required: true
+  payload-dir:
+    description: Directory containing the published payload to wrap (the `dotnet publish` output).
+    required: true
+  output-dir:
+    description: Destination directory for the produced `.msi`.
+    required: true
+  wix-version:
+    description: WiX 5 dotnet tool version to install (5.x semver).
+    required: false
+    default: 5.0.2
+  extensions:
+    description: Optional comma-separated list of WiX extensions (e.g. WixToolset.UI.wixext).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Build MSI
+      shell: pwsh
+      env:
+        WIX_SOURCE_PATH: ${{ inputs.wix-source-path }}
+        VERSION: ${{ inputs.version }}
+        PLATFORM: ${{ inputs.platform }}
+        PAYLOAD_DIR: ${{ inputs.payload-dir }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        WIX_VERSION: ${{ inputs.wix-version }}
+        EXTENSIONS: ${{ inputs.extensions }}
+      run: |
+        $extList = @()
+        if ($env:EXTENSIONS) {
+            $extList = $env:EXTENSIONS.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        }
+        $params = @{
+            WixSourcePath = $env:WIX_SOURCE_PATH
+            Version       = $env:VERSION
+            Platform      = $env:PLATFORM
+            PayloadDir    = $env:PAYLOAD_DIR
+            OutputDir     = $env:OUTPUT_DIR
+            WixVersion    = $env:WIX_VERSION
+        }
+        if ($extList.Count -gt 0) { $params['Extension'] = $extList }
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/msi/Invoke-WixMsiBuild.ps1" @params
