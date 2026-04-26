@@ -1,0 +1,41 @@
+name: Build .NET MSIX package
+description: |
+  Restores, builds, and produces an MSIX package for a .NET WinUI 3 application via
+  `dotnet publish` with AppxPackage flags. Outputs go to the supplied directory and
+  include the platform-specific `.msix`.
+
+  The runner must already have a compatible .NET SDK installed (e.g. via
+  `actions/setup-dotnet@v5`). The project must declare `EnableMsixTooling=true` and
+  ship a `Package.appxmanifest`.
+
+inputs:
+  project-path:
+    description: Path to the .csproj that owns the MSIX manifest.
+    required: true
+  platform:
+    description: Build platform (`x64`, `ARM64`, or `x86`).
+    required: true
+  configuration:
+    description: MSBuild configuration.
+    required: false
+    default: Release
+  output-dir:
+    description: Destination directory for the AppxPackage output.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build MSIX
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+        PLATFORM: ${{ inputs.platform }}
+        CONFIGURATION: ${{ inputs.configuration }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/msix/New-DotnetMsixPackage.ps1" `
+          -ProjectPath $env:PROJECT_PATH `
+          -Platform $env:PLATFORM `
+          -Configuration $env:CONFIGURATION `
+          -OutputDir $env:OUTPUT_DIR

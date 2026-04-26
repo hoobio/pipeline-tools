@@ -1,0 +1,91 @@
+name: Run release-please with retry
+description: |
+  Wraps `googleapis/release-please-action` behind a GitHub App-issued token so the
+  release PR is authored by the App (which lets it trigger downstream CI), with one
+  automatic retry to absorb transient API hiccups.
+
+  Outputs `release_created`, `tag_name`, and `pr` so the calling workflow can gate
+  follow-on jobs (build, sign, attach assets, publish, etc.) on whether release-please
+  actually cut a release.
+
+inputs:
+  app-id:
+    description: GitHub App ID for release-please.
+    required: true
+  app-private-key:
+    description: GitHub App private key (PEM).
+    required: true
+  config-file:
+    description: Path to release-please-config.json. Defaults to repo root.
+    required: false
+    default: release-please-config.json
+  manifest-file:
+    description: Path to .release-please-manifest.json. Defaults to repo root.
+    required: false
+    default: .release-please-manifest.json
+
+outputs:
+  release_created:
+    description: '"true" if release-please cut a release this run.'
+    value: ${{ steps.merge.outputs.release_created }}
+  tag_name:
+    description: Tag name for the released version (empty if no release).
+    value: ${{ steps.merge.outputs.tag_name }}
+  pr:
+    description: JSON describing the open release PR (if any).
+    value: ${{ steps.merge.outputs.pr }}
+
+runs:
+  using: composite
+  steps:
+    - id: app-token
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ github.repository_owner }}
+
+    - id: attempt-1
+      uses: googleapis/release-please-action@v5
+      continue-on-error: true
+      with:
+        token: ${{ steps.app-token.outputs.token }}
+        config-file: ${{ inputs.config-file }}
+        manifest-file: ${{ inputs.manifest-file }}
+
+    - if: steps.attempt-1.outcome == 'failure'
+      shell: bash
+      run: sleep 15
+
+    - id: attempt-2
+      if: steps.attempt-1.outcome == 'failure'
+      uses: googleapis/release-please-action@v5
+      with:
+        token: ${{ steps.app-token.outputs.token }}
+        config-file: ${{ inputs.config-file }}
+        manifest-file: ${{ inputs.manifest-file }}
+
+    - id: merge
+      shell: bash
+      env:
+        A1_OUTCOME: ${{ steps.attempt-1.outcome }}
+        A1_RELEASE: ${{ steps.attempt-1.outputs.release_created }}
+        A1_TAG: ${{ steps.attempt-1.outputs.tag_name }}
+        A1_PR: ${{ steps.attempt-1.outputs.pr }}
+        A2_RELEASE: ${{ steps.attempt-2.outputs.release_created }}
+        A2_TAG: ${{ steps.attempt-2.outputs.tag_name }}
+        A2_PR: ${{ steps.attempt-2.outputs.pr }}
+      run: |
+        if [ "$A1_OUTCOME" = "success" ]; then
+          {
+            echo "release_created=$A1_RELEASE"
+            echo "tag_name=$A1_TAG"
+            printf 'pr<<EOF\n%s\nEOF\n' "$A1_PR"
+          } >> "$GITHUB_OUTPUT"
+        else
+          {
+            echo "release_created=$A2_RELEASE"
+            echo "tag_name=$A2_TAG"
+            printf 'pr<<EOF\n%s\nEOF\n' "$A2_PR"
+          } >> "$GITHUB_OUTPUT"
+        fi

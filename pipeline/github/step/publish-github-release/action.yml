@@ -1,0 +1,44 @@
+name: Publish a draft GitHub Release
+description: |
+  Flips a draft GitHub Release to published. Use as the LAST step in a release
+  workflow when immutable releases are enabled: every asset must be attached to
+  the draft first, since this step locks the release for good.
+
+  Idempotent: if the release is already published, this is a no-op.
+
+inputs:
+  tag:
+    description: Release tag identifying the draft to publish.
+    required: true
+  repository:
+    description: Target repository (owner/name). Leave empty to use the current repo.
+    required: false
+    default: ''
+  github-token:
+    description: |
+      GitHub token used by `gh`. Pass the calling workflow's `github.token` value via
+      this input. Composite action input defaults cannot reference the `github`
+      context, which is why this cannot be defaulted here.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Publish draft release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag }}
+        REPO: ${{ inputs.repository }}
+      run: |
+        set -euo pipefail
+        if [ -z "$REPO" ]; then
+          REPO="$GITHUB_REPOSITORY"
+        fi
+        IS_DRAFT=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')
+        if [ "$IS_DRAFT" = "false" ]; then
+          echo "Release $TAG is already published"
+          exit 0
+        fi
+        gh release edit "$TAG" --repo "$REPO" --draft=false
+        echo "Published draft release $TAG"
