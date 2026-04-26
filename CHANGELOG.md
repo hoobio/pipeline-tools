@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/hoobio/pipeline-tools/compare/v1.3.0...v1.3.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* **release-please:** pre-create version tag to avoid duplicate next-release PR ([#12](https://github.com/hoobio/pipeline-tools/issues/12)) ([549437d](https://github.com/hoobio/pipeline-tools/commit/549437dcf6f20cd8d064eedc5780687ead9ac8a7))
+
 ## [1.3.0](https://github.com/hoobio/pipeline-tools/compare/v1.2.0...v1.3.0) (2026-04-26)
 
 
