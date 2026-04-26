@@ -86,7 +86,12 @@ $response = Invoke-RestMethod @irmArgs
 if ($ExpectStatus -notcontains $statusCode) {
     $msg = "DT $Method $Path failed with HTTP $statusCode"
     if ($null -ne $response) {
-        try { $msg += ": $($response | ConvertTo-Json -Depth 5 -Compress)" } catch {}
+        try {
+            $msg += ": $($response | ConvertTo-Json -Depth 5 -Compress)"
+        }
+        catch {
+            Write-Verbose "Could not serialise DT error response body: $($_.Exception.Message)"
+        }
     }
     throw $msg
 }
