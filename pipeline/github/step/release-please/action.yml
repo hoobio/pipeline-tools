@@ -4,6 +4,16 @@ description: |
   release PR is authored by the App (which lets it trigger downstream CI), with one
   automatic retry to absorb transient API hiccups.
 
+  Pre-creates the version tag from `.release-please-manifest.json` if missing.
+  This works around https://github.com/googleapis/release-please/issues/1650:
+  when `draft: true` is set in the release-please config, the GitHub Release is
+  created in draft mode and its underlying git tag is materialised lazily (only
+  on publish). release-please-action runs twice in the same call (cut the
+  release for the merged release-please PR, then compute the next PR), so the
+  second pass can't see the just-drafted release, walks history from the start,
+  and opens a duplicate "next" PR re-listing every already-released commit.
+  Pre-materialising the tag fixes the boundary detection.
+
   Outputs `release_created`, `tag_name`, and `pr` so the calling workflow can gate
   follow-on jobs (build, sign, attach assets, publish, etc.) on whether release-please
   actually cut a release.
@@ -44,6 +54,75 @@ runs:
         app-id: ${{ inputs.app-id }}
         private-key: ${{ inputs.app-private-key }}
         owner: ${{ github.repository_owner }}
+
+    # Pre-materialise the manifest's tag if missing. See the description above
+    # for why this is needed when `draft: true` is in the release-please config.
+    # Idempotent: skipped when the tag already exists, or when the manifest
+    # doesn't exist yet (first-run bootstrap before release-please ever ran).
+    - name: Pre-create release tag if missing
+      uses: actions/github-script@v8
+      env:
+        MANIFEST_FILE: ${{ inputs.manifest-file }}
+      with:
+        github-token: ${{ steps.app-token.outputs.token }}
+        script: |
+          const manifestPath = process.env.MANIFEST_FILE;
+          const tagPrefix = 'v';
+          const manifestPackage = '.';
+
+          let manifestData;
+          try {
+            const { data } = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: manifestPath,
+              ref: context.sha,
+            });
+            const content = Buffer.from(data.content, data.encoding || 'base64').toString('utf8');
+            manifestData = JSON.parse(content);
+          } catch (error) {
+            if (error.status === 404) {
+              core.info(`Manifest '${manifestPath}' not found at ${context.sha}; skipping pre-tag (first-run bootstrap).`);
+              return;
+            }
+            throw error;
+          }
+
+          const rawVersion = manifestData[manifestPackage];
+          if (!rawVersion) {
+            core.info(`Manifest has no entry for package '${manifestPackage}'; skipping pre-tag.`);
+            return;
+          }
+
+          const tagVersion = `${tagPrefix}${rawVersion}`;
+          core.info(`Manifest version: ${rawVersion} -> tag ${tagVersion}`);
+
+          try {
+            await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `tags/${tagVersion}`,
+            });
+            core.info(`Tag ${tagVersion} already exists; nothing to do.`);
+            return;
+          } catch (error) {
+            if (error.status !== 404) {
+              core.setFailed(`Tag verification failed: HTTP ${error.status} ${error.message}`);
+              return;
+            }
+          }
+
+          try {
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${tagVersion}`,
+              sha: context.sha,
+            });
+            core.notice(`Pre-created tag ${tagVersion} -> ${context.sha} so release-please can find the boundary.`);
+          } catch (error) {
+            core.setFailed(`Tag creation failed: HTTP ${error.status} ${error.message}`);
+          }
 
     - id: attempt-1
       uses: googleapis/release-please-action@v5
