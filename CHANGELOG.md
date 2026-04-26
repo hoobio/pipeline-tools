@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/hoobio/pipeline-tools/compare/v1.0.1...v1.0.2) (2026-04-26)
+
+
+### Bug Fixes
+
+* **actions:** scrub `github` context references from upload-to-github-release manifest ([a0b9487](https://github.com/hoobio/pipeline-tools/commit/a0b94878da0f8adf88d6fd9ddc50f8d2bab70a1c))
+
 ## [1.0.1](https://github.com/hoobio/pipeline-tools/compare/v1.0.0...v1.0.1) (2026-04-26)
 
 
