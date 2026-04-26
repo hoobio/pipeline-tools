@@ -52,9 +52,15 @@ Write-Information "Building $ProjectPath ($Platform/$Configuration)" -Informatio
 if ($LASTEXITCODE -ne 0) { throw "dotnet build failed (exit $LASTEXITCODE)" }
 
 Write-Information "Publishing MSIX for $ProjectPath ($Platform/$Configuration) to $absOutput" -InformationAction Continue
+# WindowsPackageType=MSIX overrides projects that ship unpackaged by default
+# (e.g. WinUI apps that set WindowsPackageType=None for local dev). Projects already
+# defaulting to MSIX are unaffected. WindowsAppSDKSelfContained=false keeps the MSIX
+# size bounded by relying on the Windows App SDK runtime install.
 & dotnet publish $ProjectPath `
     -c $Configuration `
     -p:Platform=$Platform `
+    -p:WindowsPackageType=MSIX `
+    -p:WindowsAppSDKSelfContained=false `
     -p:AppxPackageDir="$absOutput\" `
     -p:GenerateAppxPackageOnBuild=true `
     -p:AppxBundle=Never
