@@ -23,9 +23,11 @@ inputs:
     required: false
     default: 'true'
   github-token:
-    description: GitHub token used by `gh`. Defaults to the workflow token.
-    required: false
-    default: ${{ github.token }}
+    description: |
+      GitHub token used by `gh`. Pass `${{ github.token }}` from the calling workflow
+      (composite action input defaults cannot reference the `github` context, so this
+      cannot be defaulted here).
+    required: true
 
 runs:
   using: composite
