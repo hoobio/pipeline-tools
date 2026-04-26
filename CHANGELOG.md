@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/hoobio/pipeline-tools/compare/v1.0.0...v1.0.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* **actions:** require explicit github-token input on upload-to-github-release ([e299794](https://github.com/hoobio/pipeline-tools/commit/e299794181ca471e936ec737fbf66cd3ac9fca56))
+
 ## 1.0.0 (2026-04-26)
 
 
