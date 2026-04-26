@@ -4,8 +4,9 @@ description: |
   Useful as a follow-up to SBOM generation on a release event so the BOM ships with
   the release artefacts.
 
-  The runner needs `contents: write` permission and a token with release-edit access
-  (the workflow's `${{ github.token }}` is sufficient for releases in the same repo).
+  The runner needs `contents: write` permission and a token with release-edit access.
+  The workflow's `github.token` value is normally sufficient for releases in the same
+  repository - pass it via the `github-token` input.
 
 inputs:
   tag:
@@ -15,18 +16,18 @@ inputs:
     description: Path to the file to upload.
     required: true
   repository:
-    description: Target repository (owner/name). Defaults to the current repository.
+    description: Target repository (owner/name). Leave empty to use the current repository.
     required: false
-    default: ${{ github.repository }}
+    default: ''
   clobber:
     description: Overwrite the asset if a file with the same name already exists.
     required: false
     default: 'true'
   github-token:
     description: |
-      GitHub token used by `gh`. Pass `${{ github.token }}` from the calling workflow
-      (composite action input defaults cannot reference the `github` context, so this
-      cannot be defaulted here).
+      GitHub token used by `gh`. Pass the calling workflow's `github.token` value via
+      this input. Composite action input defaults cannot reference the `github`
+      context, which is why this cannot be defaulted here.
     required: true
 
 runs:
@@ -42,6 +43,9 @@ runs:
         CLOBBER: ${{ inputs.clobber }}
       run: |
         set -euo pipefail
+        if [ -z "$REPO" ]; then
+          REPO="$GITHUB_REPOSITORY"
+        fi
         if [ ! -f "$FILE_PATH" ]; then
           echo "::error::file-path '$FILE_PATH' does not exist"
           exit 1
