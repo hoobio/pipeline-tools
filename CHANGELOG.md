@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/hoobio/pipeline-tools/compare/v1.1.0...v1.2.0) (2026-04-26)
+
+
+### Features
+
+* **run-wack:** add fail-on-error input as preferred name ([#8](https://github.com/hoobio/pipeline-tools/issues/8)) ([2e49f24](https://github.com/hoobio/pipeline-tools/commit/2e49f24297bb793d3f923ff9432e2892006772a7))
+
 ## [1.1.0](https://github.com/hoobio/pipeline-tools/compare/v1.0.2...v1.1.0) (2026-04-26)
 
 
