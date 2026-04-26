@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/hoobio/pipeline-tools/compare/v1.0.2...v1.1.0) (2026-04-26)
+
+
+### Features
+
+* release-please, MSIX build/sign, WACK, and publish-github-release helpers ([#6](https://github.com/hoobio/pipeline-tools/issues/6)) ([d3da483](https://github.com/hoobio/pipeline-tools/commit/d3da483d1b8349ecde672b6208d9e2854ecbba7c))
+
 ## [1.0.2](https://github.com/hoobio/pipeline-tools/compare/v1.0.1...v1.0.2) (2026-04-26)
 
 
