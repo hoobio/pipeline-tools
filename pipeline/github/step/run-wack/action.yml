@@ -4,9 +4,9 @@ description: |
   parses the report, applies an optional exclusion list, and emits a Markdown summary.
   Designed to be the gate between MSIX build and release publish on Windows runners.
 
-  When `fail-on-real-failure` is `true` the step exits non-zero if any non-excluded
-  test fails. Excluded test failures are surfaced in the summary but do not fail the
-  build.
+  When `fail-on-error` is `true` (the default) the step exits non-zero if any
+  non-excluded test fails. Excluded test failures are surfaced in the summary but
+  do not fail the build.
 
 inputs:
   msix-path:
@@ -30,10 +30,20 @@ inputs:
       `$GITHUB_STEP_SUMMARY`, the summary is written to that path automatically.
     required: false
     default: ''
-  fail-on-real-failure:
-    description: Fail the step if at least one non-excluded test fails.
+  fail-on-error:
+    description: |
+      Fail the step if at least one non-excluded test fails. Defaults to `true`.
+      Set to `false` on PR runs if you want WACK to surface failures via the PR
+      summary without blocking the merge.
     required: false
-    default: 'true'
+    default: ''
+  fail-on-real-failure:
+    description: |
+      Deprecated alias for `fail-on-error`. Retained for backward compatibility
+      with the v1.1.0 input name; will be removed in a future major version. If
+      both inputs are set, `fail-on-error` wins.
+    required: false
+    default: ''
   platform:
     description: Optional label included in the summary header (e.g. `x64`).
     required: false
@@ -49,6 +59,7 @@ runs:
         WACK_REPORT_PATH: ${{ inputs.report-path }}
         WACK_EXCLUSIONS_PATH: ${{ inputs.exclusions-path }}
         WACK_SUMMARY_PATH: ${{ inputs.summary-path }}
+        WACK_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
         WACK_FAIL_ON_REAL: ${{ inputs.fail-on-real-failure }}
         WACK_PLATFORM: ${{ inputs.platform }}
       run: |
@@ -64,6 +75,12 @@ runs:
         if ($summary) { $params.SummaryPath = $summary }
 
         if ($env:WACK_PLATFORM) { $params.Platform = $env:WACK_PLATFORM }
-        if ($env:WACK_FAIL_ON_REAL -eq 'true') { $params.FailOnRealFailure = $true }
+
+        # Resolve fail-on-error: new input wins, falls back to deprecated alias,
+        # defaults to 'true' when neither is set.
+        $failChoice = if ($env:WACK_FAIL_ON_ERROR) { $env:WACK_FAIL_ON_ERROR }
+                      elseif ($env:WACK_FAIL_ON_REAL) { $env:WACK_FAIL_ON_REAL }
+                      else { 'true' }
+        if ($failChoice -eq 'true') { $params.FailOnRealFailure = $true }
 
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/msix/Invoke-Wack.ps1" @params
