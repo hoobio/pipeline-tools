@@ -1,0 +1,184 @@
+name: Upload SBOM to Dependency-Track (full pipeline)
+description: |
+  End-to-end CycloneDX SBOM upload to Dependency-Track for a .NET project.
+
+  Runs:
+    1. Generate the CycloneDX BOM from the supplied solution / project file.
+    2. Optionally publish it as a workflow artifact for inspection.
+    3. Ensure the parent project exists in Dependency-Track (bootstraps if missing).
+    4. Upload the BOM to the child project, linked to the parent.
+    5. Optionally mark the child project as `isLatest = true`.
+    6. Optionally prune stale children under the parent, keeping only the most recent N.
+
+  Each individual step is also available as a standalone composite action under
+  `pipeline/github/step/`. Consume this job action when you want the full pipeline,
+  or compose your own from the steps.
+
+inputs:
+  solution-path:
+    description: Path to the .sln, .slnx, or .csproj to scan.
+    required: true
+  bom-path:
+    description: Path the BOM is written to (and uploaded from).
+    required: false
+    default: sbom.cdx.json
+  spec-version:
+    description: CycloneDX specification version.
+    required: false
+    default: '1.6'
+  cyclonedx-tool-version:
+    description: Version of the dotnet CycloneDX global tool.
+    required: false
+    default: 6.1.1
+  upload-artifact:
+    description: Upload the BOM as a workflow artifact.
+    required: false
+    default: 'true'
+  artifact-name:
+    description: Workflow artifact name.
+    required: false
+    default: sbom-cyclonedx
+
+  server-url:
+    description: Dependency-Track server URL including scheme.
+    required: true
+  api-key:
+    description: Dependency-Track API key.
+    required: true
+
+  project-name:
+    description: Child project name.
+    required: true
+  project-version:
+    description: Child project version.
+    required: true
+  project-tags:
+    description: Comma-separated tags for the child project. (DT 4.12+).
+    required: false
+    default: ''
+
+  parent-name:
+    description: Parent project name. Empty to skip parent linkage.
+    required: false
+    default: ''
+  parent-version:
+    description: Parent project version. Empty to skip parent linkage.
+    required: false
+    default: ''
+
+  mark-latest:
+    description: Mark the child project as `isLatest = true` after upload.
+    required: false
+    default: 'false'
+
+  prune-stale-children:
+    description: After upload, prune stale children under the parent (requires parent inputs).
+    required: false
+    default: 'false'
+  keep:
+    description: Number of most recent children to retain when pruning.
+    required: false
+    default: '10'
+
+runs:
+  using: composite
+  steps:
+    - name: Generate CycloneDX SBOM
+      shell: pwsh
+      env:
+        SOLUTION_PATH: ${{ inputs.solution-path }}
+        OUTPUT_PATH: ${{ inputs.bom-path }}
+        SPEC_VERSION: ${{ inputs.spec-version }}
+        TOOL_VERSION: ${{ inputs.cyclonedx-tool-version }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/sbom/New-CycloneDxSbom.ps1" `
+          -SolutionPath $env:SOLUTION_PATH `
+          -OutputPath $env:OUTPUT_PATH `
+          -SpecVersion $env:SPEC_VERSION `
+          -ToolVersion $env:TOOL_VERSION
+
+    - name: Upload BOM as workflow artifact
+      if: inputs.upload-artifact == 'true'
+      uses: actions/upload-artifact@v5
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.bom-path }}
+        if-no-files-found: error
+
+    - name: Ensure Dependency-Track parent project exists
+      if: inputs.parent-name != '' && inputs.parent-version != ''
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_PROJECT_NAME: ${{ inputs.parent-name }}
+        DT_PROJECT_VERSION: ${{ inputs.parent-version }}
+        DT_BOM_PATH: ${{ inputs.bom-path }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Initialize-DTParentProject.ps1" `
+          -ServerUrl $env:DT_SERVER_URL `
+          -ApiKey $env:DT_API_KEY `
+          -ProjectName $env:DT_PROJECT_NAME `
+          -ProjectVersion $env:DT_PROJECT_VERSION `
+          -BomPath $env:DT_BOM_PATH
+
+    - name: Upload BOM to Dependency-Track
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_PROJECT_NAME: ${{ inputs.project-name }}
+        DT_PROJECT_VERSION: ${{ inputs.project-version }}
+        DT_BOM_PATH: ${{ inputs.bom-path }}
+        DT_PARENT_NAME: ${{ inputs.parent-name }}
+        DT_PARENT_VERSION: ${{ inputs.parent-version }}
+        DT_PROJECT_TAGS: ${{ inputs.project-tags }}
+      run: |
+        $params = @{
+          ServerUrl      = $env:DT_SERVER_URL
+          ApiKey         = $env:DT_API_KEY
+          ProjectName    = $env:DT_PROJECT_NAME
+          ProjectVersion = $env:DT_PROJECT_VERSION
+          BomPath        = $env:DT_BOM_PATH
+          AutoCreate     = $true
+        }
+        if ($env:DT_PARENT_NAME -and $env:DT_PARENT_VERSION) {
+          $params.ParentName    = $env:DT_PARENT_NAME
+          $params.ParentVersion = $env:DT_PARENT_VERSION
+        }
+        if ($env:DT_PROJECT_TAGS) {
+          $params.ProjectTags = $env:DT_PROJECT_TAGS
+        }
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Send-DTBom.ps1" @params
+
+    - name: Mark project as latest
+      if: inputs.mark-latest == 'true'
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_PROJECT_NAME: ${{ inputs.project-name }}
+        DT_PROJECT_VERSION: ${{ inputs.project-version }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Set-DTProjectLatest.ps1" `
+          -ServerUrl $env:DT_SERVER_URL `
+          -ApiKey $env:DT_API_KEY `
+          -ProjectName $env:DT_PROJECT_NAME `
+          -ProjectVersion $env:DT_PROJECT_VERSION
+
+    - name: Prune stale child projects under parent
+      if: inputs.prune-stale-children == 'true' && inputs.parent-name != '' && inputs.parent-version != ''
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_PARENT_NAME: ${{ inputs.parent-name }}
+        DT_PARENT_VERSION: ${{ inputs.parent-version }}
+        DT_KEEP: ${{ inputs.keep }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Remove-DTStaleChildren.ps1" `
+          -ServerUrl $env:DT_SERVER_URL `
+          -ApiKey $env:DT_API_KEY `
+          -ParentName $env:DT_PARENT_NAME `
+          -ParentVersion $env:DT_PARENT_VERSION `
+          -Keep ([int]$env:DT_KEEP)

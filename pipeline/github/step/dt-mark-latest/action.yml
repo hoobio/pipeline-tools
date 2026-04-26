@@ -1,0 +1,36 @@
+name: Mark Dependency-Track project as latest
+description: |
+  Marks the given (name, version) Dependency-Track project as `isLatest = true`. The
+  flag is name-scoped in Dependency-Track: only one version per project name can hold
+  it, and setting it on a new version automatically clears it on the previous holder.
+
+inputs:
+  server-url:
+    description: Dependency-Track server URL including scheme.
+    required: true
+  api-key:
+    description: Dependency-Track API key.
+    required: true
+  project-name:
+    description: Project name to look up.
+    required: true
+  project-version:
+    description: Project version to mark as latest.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Mark latest
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_PROJECT_NAME: ${{ inputs.project-name }}
+        DT_PROJECT_VERSION: ${{ inputs.project-version }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Set-DTProjectLatest.ps1" `
+          -ServerUrl $env:DT_SERVER_URL `
+          -ApiKey $env:DT_API_KEY `
+          -ProjectName $env:DT_PROJECT_NAME `
+          -ProjectVersion $env:DT_PROJECT_VERSION

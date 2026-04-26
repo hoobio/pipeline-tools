@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-pwsh:
+    name: PowerShell static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path scripts -Recurse -Severity @('Error','Warning')
+          if ($results) {
+            $results | Format-Table -AutoSize | Out-String | Write-Host
+            throw "PSScriptAnalyzer reported $($results.Count) issue(s)"
+          }
+          Write-Host "PSScriptAnalyzer clean"
+
+  lint-yaml:
+    name: YAML schema validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate YAML parses
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse -Include *.yml,*.yaml -File |
+            Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
+          if (-not $files) {
+            Write-Warning "No YAML files found"
+            return
+          }
+          if (-not (Get-Module -ListAvailable powershell-yaml)) {
+            Install-Module -Name powershell-yaml -Force -Scope CurrentUser
+          }
+          Import-Module powershell-yaml
+          $failed = @()
+          foreach ($file in $files) {
+            try {
+              $null = ConvertFrom-Yaml (Get-Content -Raw -LiteralPath $file.FullName)
+              Write-Host "ok     $($file.FullName)"
+            }
+            catch {
+              Write-Host "FAILED $($file.FullName): $($_.Exception.Message)"
+              $failed += $file
+            }
+          }
+          if ($failed) {
+            throw "$($failed.Count) YAML file(s) failed to parse"
+          }

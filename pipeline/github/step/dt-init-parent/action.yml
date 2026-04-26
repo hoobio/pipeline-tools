@@ -1,0 +1,44 @@
+name: Ensure Dependency-Track parent project exists
+description: |
+  Looks up a Dependency-Track project by (name, version). If it doesn't exist,
+  bootstraps it by uploading the supplied BOM with autoCreate=true and no parent
+  reference, so subsequent uploads can use it as a parent.
+
+  Avoids the higher-privilege PORTFOLIO_MANAGEMENT permission required by
+  PUT /api/v1/project; only PROJECT_CREATION_UPLOAD is needed.
+
+inputs:
+  server-url:
+    description: Dependency-Track server URL including scheme (e.g. https://dt.example.com).
+    required: true
+  api-key:
+    description: Dependency-Track API key with PROJECT_CREATION_UPLOAD.
+    required: true
+  project-name:
+    description: Parent project name to ensure.
+    required: true
+  project-version:
+    description: Parent project version to ensure.
+    required: true
+  bom-path:
+    description: Path to a CycloneDX BOM used to bootstrap the parent if missing.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Ensure parent project
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_PROJECT_NAME: ${{ inputs.project-name }}
+        DT_PROJECT_VERSION: ${{ inputs.project-version }}
+        DT_BOM_PATH: ${{ inputs.bom-path }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Initialize-DTParentProject.ps1" `
+          -ServerUrl $env:DT_SERVER_URL `
+          -ApiKey $env:DT_API_KEY `
+          -ProjectName $env:DT_PROJECT_NAME `
+          -ProjectVersion $env:DT_PROJECT_VERSION `
+          -BomPath $env:DT_BOM_PATH

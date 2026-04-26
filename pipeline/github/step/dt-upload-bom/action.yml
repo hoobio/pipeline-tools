@@ -1,0 +1,73 @@
+name: Upload BOM to Dependency-Track
+description: |
+  Uploads a CycloneDX BOM to a Dependency-Track server via the REST API. Drop-in
+  replacement for DependencyTrack/gh-upload-sbom. Supports parent linkage (DT 4.8+)
+  and project tags (DT 4.12+).
+
+inputs:
+  server-url:
+    description: Dependency-Track server URL including scheme (e.g. https://dt.example.com).
+    required: true
+  api-key:
+    description: Dependency-Track API key.
+    required: true
+  project-name:
+    description: Target project name.
+    required: true
+  project-version:
+    description: Target project version.
+    required: true
+  bom-path:
+    description: Path to the CycloneDX BOM file.
+    required: true
+  parent-name:
+    description: Parent project name. Empty to skip. (DT 4.8+).
+    required: false
+    default: ''
+  parent-version:
+    description: Parent project version. Empty to skip. (DT 4.8+).
+    required: false
+    default: ''
+  project-tags:
+    description: Comma-separated tags. (DT 4.12+).
+    required: false
+    default: ''
+  auto-create:
+    description: Auto-create the project if it does not exist.
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Upload BOM
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_PROJECT_NAME: ${{ inputs.project-name }}
+        DT_PROJECT_VERSION: ${{ inputs.project-version }}
+        DT_BOM_PATH: ${{ inputs.bom-path }}
+        DT_PARENT_NAME: ${{ inputs.parent-name }}
+        DT_PARENT_VERSION: ${{ inputs.parent-version }}
+        DT_PROJECT_TAGS: ${{ inputs.project-tags }}
+        DT_AUTO_CREATE: ${{ inputs.auto-create }}
+      run: |
+        $params = @{
+          ServerUrl      = $env:DT_SERVER_URL
+          ApiKey         = $env:DT_API_KEY
+          ProjectName    = $env:DT_PROJECT_NAME
+          ProjectVersion = $env:DT_PROJECT_VERSION
+          BomPath        = $env:DT_BOM_PATH
+        }
+        if ($env:DT_PARENT_NAME -and $env:DT_PARENT_VERSION) {
+          $params.ParentName    = $env:DT_PARENT_NAME
+          $params.ParentVersion = $env:DT_PARENT_VERSION
+        }
+        if ($env:DT_PROJECT_TAGS) {
+          $params.ProjectTags = $env:DT_PROJECT_TAGS
+        }
+        if ($env:DT_AUTO_CREATE -eq 'true') {
+          $params.AutoCreate = $true
+        }
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Send-DTBom.ps1" @params

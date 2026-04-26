@@ -1,0 +1,25 @@
+# PowerShell
+*.psm1.bak
+
+# Editor / OS
+.vscode/*.local
+!.vscode/settings.json
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Tool outputs
+.sbom-out/
+*.cdx.json
+*.cdx.xml
+
+# Local secrets / env
+.env
+.env.local
+*.local.yml
+*.local.yaml
+
+# Test artefacts
+TestResults/
+coverage/
+*.log

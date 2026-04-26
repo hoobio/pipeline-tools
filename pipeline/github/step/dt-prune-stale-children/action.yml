@@ -1,0 +1,43 @@
+name: Prune stale Dependency-Track child projects
+description: |
+  Lists children of a Dependency-Track parent project, sorts them by lastBomImport
+  descending, and deletes everything past the most recent N. Useful when each CI
+  build creates a new per-commit child project and the list would otherwise grow
+  without bound.
+
+inputs:
+  server-url:
+    description: Dependency-Track server URL including scheme.
+    required: true
+  api-key:
+    description: Dependency-Track API key with project-delete permission.
+    required: true
+  parent-name:
+    description: Parent project name.
+    required: true
+  parent-version:
+    description: Parent project version.
+    required: true
+  keep:
+    description: Number of most recent children to retain.
+    required: false
+    default: '10'
+
+runs:
+  using: composite
+  steps:
+    - name: Prune stale children
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_PARENT_NAME: ${{ inputs.parent-name }}
+        DT_PARENT_VERSION: ${{ inputs.parent-version }}
+        DT_KEEP: ${{ inputs.keep }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Remove-DTStaleChildren.ps1" `
+          -ServerUrl $env:DT_SERVER_URL `
+          -ApiKey $env:DT_API_KEY `
+          -ParentName $env:DT_PARENT_NAME `
+          -ParentVersion $env:DT_PARENT_VERSION `
+          -Keep ([int]$env:DT_KEEP)

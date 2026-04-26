@@ -1,0 +1,43 @@
+name: Generate CycloneDX SBOM (.NET)
+description: |
+  Installs the dotnet CycloneDX global tool and generates a CycloneDX JSON BOM for a
+  .NET solution or project. Output is written to the specified path.
+
+inputs:
+  solution-path:
+    description: Path to the .sln, .slnx, or .csproj to scan.
+    required: true
+  output-path:
+    description: Destination path for the BOM JSON file.
+    required: false
+    default: sbom.cdx.json
+  spec-version:
+    description: CycloneDX specification version emitted in the BOM.
+    required: false
+    default: '1.6'
+  tool-version:
+    description: Version of the dotnet CycloneDX global tool to install.
+    required: false
+    default: 6.1.1
+
+outputs:
+  bom-path:
+    description: Resolved path to the generated BOM file.
+    value: ${{ inputs.output-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate CycloneDX SBOM
+      shell: pwsh
+      env:
+        SOLUTION_PATH: ${{ inputs.solution-path }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+        SPEC_VERSION: ${{ inputs.spec-version }}
+        TOOL_VERSION: ${{ inputs.tool-version }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/sbom/New-CycloneDxSbom.ps1" `
+          -SolutionPath $env:SOLUTION_PATH `
+          -OutputPath $env:OUTPUT_PATH `
+          -SpecVersion $env:SPEC_VERSION `
+          -ToolVersion $env:TOOL_VERSION
