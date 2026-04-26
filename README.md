@@ -37,7 +37,16 @@ Pin to a release tag (`@v0.1.0`) or commit SHA. Avoid `@main`.
 
 ## GitHub Actions: SBOM upload to Dependency-Track
 
-Single action that does everything:
+The job action `upload-sbom-to-dependency-track` consumes a pre-generated CycloneDX BOM and runs the full DT-side pipeline (artifact upload, parent bootstrap, child upload with parent linkage, optional `isLatest`, optional pruning of stale children).
+
+Generation is intentionally separate so each language can use its native tool. Pair this action with whichever generator fits your project:
+
+| Language / Source | Generator step |
+|---|---|
+| .NET solution / project | `pipeline/github/step/cyclonedx-sbom-dotnet` |
+| Node, Python, container, ...     | Bring your own; output a CycloneDX BOM file. |
+
+### .NET example
 
 ```yaml
 jobs:
@@ -48,9 +57,15 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
-      - uses: hoobio/pipeline-tools/pipeline/github/job/upload-sbom-to-dependency-track@v0.1.0
+
+      - uses: hoobio/pipeline-tools/pipeline/github/step/cyclonedx-sbom-dotnet@<sha>
         with:
-          solution-path:    src/MySolution.slnx
+          solution-path: src/MySolution.slnx
+          output-path: sbom.cdx.json
+
+      - uses: hoobio/pipeline-tools/pipeline/github/job/upload-sbom-to-dependency-track@<sha>
+        with:
+          bom-path:         sbom.cdx.json
           server-url:       ${{ secrets.DT_SERVER_URL }}    # e.g. https://dt.example.com
           api-key:          ${{ secrets.DT_API_KEY }}
           project-name:     ${{ github.event.repository.name }}
@@ -63,7 +78,25 @@ jobs:
           keep:             '10'
 ```
 
-If you want fine-grained control, compose your own job from the step actions under `pipeline/github/step/`. Each step is documented in its `action.yml`.
+### BYO generation example (Node, Python, container, etc.)
+
+```yaml
+- name: Generate BOM
+  run: |
+    # whatever produces a CycloneDX BOM at ./sbom.cdx.json,
+    # e.g. cyclonedx-bom, syft, @cyclonedx/cyclonedx-npm, etc.
+    ...
+
+- uses: hoobio/pipeline-tools/pipeline/github/job/upload-sbom-to-dependency-track@<sha>
+  with:
+    bom-path:        sbom.cdx.json
+    server-url:      ${{ secrets.DT_SERVER_URL }}
+    api-key:         ${{ secrets.DT_API_KEY }}
+    project-name:    ${{ github.event.repository.name }}
+    project-version: ${{ github.sha }}
+```
+
+If you want fine-grained control over the DT-side steps, compose your own job from the step actions under `pipeline/github/step/`. Each step is documented in its `action.yml`.
 
 ## PowerShell scripts
 

@@ -1,46 +1,39 @@
-name: Upload SBOM to Dependency-Track (full pipeline)
+name: Upload SBOM to Dependency-Track
 description: |
-  End-to-end CycloneDX SBOM upload to Dependency-Track for a .NET project.
+  Uploads an already-generated CycloneDX BOM to Dependency-Track and orchestrates the
+  follow-up DT operations: workflow-artifact publication, parent project bootstrap,
+  child upload with parent linkage, optional `isLatest` flag, and optional pruning of
+  stale children.
 
-  Runs:
-    1. Generate the CycloneDX BOM from the supplied solution / project file.
-    2. Optionally publish it as a workflow artifact for inspection.
-    3. Ensure the parent project exists in Dependency-Track (bootstraps if missing).
-    4. Upload the BOM to the child project, linked to the parent.
-    5. Optionally mark the child project as `isLatest = true`.
-    6. Optionally prune stale children under the parent, keeping only the most recent N.
+  Generation is intentionally NOT part of this action. The right tool to produce a
+  CycloneDX BOM differs by language (`dotnet CycloneDX` for .NET, `cyclonedx-bom` for
+  Python, `@cyclonedx/cyclonedx-npm` for Node, syft for containers, etc.). Pair this
+  action with whichever generator is appropriate for your project, e.g. the .NET
+  helper at `pipeline/github/step/cyclonedx-sbom-dotnet`.
 
-  Each individual step is also available as a standalone composite action under
-  `pipeline/github/step/`. Consume this job action when you want the full pipeline,
-  or compose your own from the steps.
+  Steps run by this action:
+    1. Optionally publish the BOM as a workflow artifact for inspection.
+    2. Ensure the parent project exists in Dependency-Track (bootstraps via BOM upload
+       if missing, so only PROJECT_CREATION_UPLOAD permission is needed).
+    3. Upload the BOM to the child project, linked to the parent.
+    4. Optionally mark the child project as `isLatest = true`.
+    5. Optionally prune stale children under the parent, keeping only the most recent N.
 
 inputs:
-  solution-path:
-    description: Path to the .sln, .slnx, or .csproj to scan.
-    required: true
   bom-path:
-    description: Path the BOM is written to (and uploaded from).
-    required: false
-    default: sbom.cdx.json
-  spec-version:
-    description: CycloneDX specification version.
-    required: false
-    default: '1.6'
-  cyclonedx-tool-version:
-    description: Version of the dotnet CycloneDX global tool.
-    required: false
-    default: 6.1.1
+    description: Path to a pre-generated CycloneDX BOM file (JSON or XML).
+    required: true
   upload-artifact:
-    description: Upload the BOM as a workflow artifact.
+    description: Publish the BOM as a workflow artifact.
     required: false
     default: 'true'
   artifact-name:
-    description: Workflow artifact name.
+    description: Workflow artifact name (only used when upload-artifact is 'true').
     required: false
     default: sbom-cyclonedx
 
   server-url:
-    description: Dependency-Track server URL including scheme.
+    description: Dependency-Track server URL including scheme (e.g. https://dt.example.com).
     required: true
   api-key:
     description: Dependency-Track API key.
@@ -53,7 +46,7 @@ inputs:
     description: Child project version.
     required: true
   project-tags:
-    description: Comma-separated tags for the child project. (DT 4.12+).
+    description: Comma-separated tags applied to the child project. (DT 4.12+).
     required: false
     default: ''
 
@@ -83,20 +76,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Generate CycloneDX SBOM
-      shell: pwsh
-      env:
-        SOLUTION_PATH: ${{ inputs.solution-path }}
-        OUTPUT_PATH: ${{ inputs.bom-path }}
-        SPEC_VERSION: ${{ inputs.spec-version }}
-        TOOL_VERSION: ${{ inputs.cyclonedx-tool-version }}
-      run: |
-        & "$env:GITHUB_ACTION_PATH/../../../../scripts/sbom/New-CycloneDxSbom.ps1" `
-          -SolutionPath $env:SOLUTION_PATH `
-          -OutputPath $env:OUTPUT_PATH `
-          -SpecVersion $env:SPEC_VERSION `
-          -ToolVersion $env:TOOL_VERSION
-
     - name: Upload BOM as workflow artifact
       if: inputs.upload-artifact == 'true'
       uses: actions/upload-artifact@v7
