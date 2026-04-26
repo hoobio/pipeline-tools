@@ -11,11 +11,13 @@ pipeline/
   ado/templates/{step,stage,job}/   # Azure DevOps templates (placeholder for now)
   github/
     step/                           # Composite actions, one per logical step
-      cyclonedx-sbom-dotnet/
-      dt-init-parent/
-      dt-upload-bom/
-      dt-mark-latest/
-      dt-prune-stale-children/
+      cyclonedx-sbom-dotnet/        # Generate a CycloneDX BOM for a .NET project
+      dt-init-parent/               # Ensure DT parent project exists (bootstrap-via-BOM)
+      dt-upload-bom/                # Upload a BOM to DT (returns masked upload-token)
+      dt-mark-latest/               # Mark project as isLatest = true
+      dt-prune-stale-children/      # Delete old children, keep N most recent
+      dt-wait-bom-processing/       # Poll until DT finishes processing the upload
+      upload-to-github-release/     # Attach a file to a GitHub Release
     job/
       upload-sbom-to-dependency-track/   # Orchestrating composite action
 scripts/
@@ -111,6 +113,7 @@ Public scripts:
 | [`scripts/dependency-track/Send-DTBom.ps1`](scripts/dependency-track/Send-DTBom.ps1) | Upload a CycloneDX BOM to DT. Drop-in replacement for the `DependencyTrack/gh-upload-sbom` action. |
 | [`scripts/dependency-track/Set-DTProjectLatest.ps1`](scripts/dependency-track/Set-DTProjectLatest.ps1) | Mark a project version as `isLatest = true`. |
 | [`scripts/dependency-track/Remove-DTStaleChildren.ps1`](scripts/dependency-track/Remove-DTStaleChildren.ps1) | Prune old child projects under a parent. |
+| [`scripts/dependency-track/Wait-DTBomProcessing.ps1`](scripts/dependency-track/Wait-DTBomProcessing.ps1) | Poll DT until a BOM upload finishes processing, or fail on timeout. |
 
 Private (internal) helper:
 
@@ -124,9 +127,15 @@ All public scripts use `[CmdletBinding()]` with typed, validated parameters. Run
 
 The DT scripts assume the API key has at minimum `PROJECT_CREATION_UPLOAD`. The pruning script additionally needs project-delete permission (typically `PORTFOLIO_MANAGEMENT`). The bootstrap path deliberately uses `POST /api/v1/bom` instead of `PUT /api/v1/project` so that workflows with only the lower-privilege key still work.
 
-## Versioning
+## Versioning and releases
 
-Pin consumers to a release tag. Breaking changes bump the major version and call out the migration in the release notes.
+This repo uses [release-please](https://github.com/googleapis/release-please) to drive Conventional-Commits-based releases. Pushing to `main` opens (or updates) a release PR with the next version and a `CHANGELOG.md` entry. Merging the release PR creates the tag and a GitHub Release.
+
+- Pin consumers to a release tag (`@v0.1.0`, `@v0.2.0`, ...) or a commit SHA. Avoid `@main`.
+- Tags matching `v*` are protected against deletion and force-update; release assets are immutable once published.
+- Breaking changes bump the major version. Call out the migration in the release notes.
+
+PR titles are validated against Conventional Commits by `.github/workflows/pr-title-check.yaml`. Allowed types: `feat`, `fix`, `perf`, `revert`, `docs`, `style`, `refactor`, `test`, `build`, `ci`, `chore`. Only `feat` / `fix` / `perf` / `revert` produce changelog entries that trigger a version bump.
 
 ## Contributing
 

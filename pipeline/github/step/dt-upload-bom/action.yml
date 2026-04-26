@@ -37,10 +37,19 @@ inputs:
     required: false
     default: 'true'
 
+outputs:
+  upload-token:
+    description: |
+      DT upload token for polling processing status. The value is masked in workflow
+      logs via `::add-mask::`. Pass to the dt-wait-bom-processing step or to
+      GET /api/v1/bom/token/{token}.
+    value: ${{ steps.send.outputs.upload-token }}
+
 runs:
   using: composite
   steps:
-    - name: Upload BOM
+    - id: send
+      name: Upload BOM
       shell: pwsh
       env:
         DT_SERVER_URL: ${{ inputs.server-url }}
@@ -70,4 +79,10 @@ runs:
         if ($env:DT_AUTO_CREATE -eq 'true') {
           $params.AutoCreate = $true
         }
-        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Send-DTBom.ps1" @params
+        $response = & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Send-DTBom.ps1" @params
+        if ($response -and $response.token) {
+          # Mask the token before exposing it as a step output. DT considers it
+          # short-lived but mid-sensitive (read-only on processing status).
+          Write-Host "::add-mask::$($response.token)"
+          "upload-token=$($response.token)" >> $env:GITHUB_OUTPUT
+        }

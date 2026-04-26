@@ -1,0 +1,43 @@
+name: Wait for Dependency-Track BOM processing
+description: |
+  Polls Dependency-Track until the BOM upload identified by `token` finishes processing,
+  or `timeout-seconds` elapses (in which case the step fails). The token is the value
+  returned by the dt-upload-bom step's `upload-token` output.
+
+inputs:
+  server-url:
+    description: Dependency-Track server URL including scheme.
+    required: true
+  api-key:
+    description: Dependency-Track API key.
+    required: true
+  token:
+    description: Upload token returned by the BOM upload endpoint.
+    required: true
+  timeout-seconds:
+    description: Maximum seconds to wait before failing.
+    required: false
+    default: '600'
+  poll-interval-seconds:
+    description: Seconds between status polls.
+    required: false
+    default: '5'
+
+runs:
+  using: composite
+  steps:
+    - name: Poll DT processing status
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_TOKEN: ${{ inputs.token }}
+        DT_TIMEOUT: ${{ inputs.timeout-seconds }}
+        DT_POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Wait-DTBomProcessing.ps1" `
+          -ServerUrl $env:DT_SERVER_URL `
+          -ApiKey $env:DT_API_KEY `
+          -Token $env:DT_TOKEN `
+          -TimeoutSeconds ([int]$env:DT_TIMEOUT) `
+          -PollIntervalSeconds ([int]$env:DT_POLL_INTERVAL)

@@ -73,6 +73,27 @@ inputs:
     required: false
     default: '10'
 
+  wait-for-processing:
+    description: Poll DT until BOM processing completes before continuing the job.
+    required: false
+    default: 'false'
+  processing-timeout-seconds:
+    description: Maximum seconds to wait for DT processing to complete.
+    required: false
+    default: '600'
+  processing-poll-interval-seconds:
+    description: Seconds between processing-status polls.
+    required: false
+    default: '5'
+
+outputs:
+  upload-token:
+    description: |
+      DT upload token returned by the BOM upload (masked in logs). Use this if
+      `wait-for-processing` is left at the default (`false`) and you want to poll
+      for processing status from a later job/step.
+    value: ${{ steps.upload.outputs.upload-token }}
+
 runs:
   using: composite
   steps:
@@ -101,7 +122,8 @@ runs:
           -ProjectVersion $env:DT_PROJECT_VERSION `
           -BomPath $env:DT_BOM_PATH
 
-    - name: Upload BOM to Dependency-Track
+    - id: upload
+      name: Upload BOM to Dependency-Track
       shell: pwsh
       env:
         DT_SERVER_URL: ${{ inputs.server-url }}
@@ -128,7 +150,28 @@ runs:
         if ($env:DT_PROJECT_TAGS) {
           $params.ProjectTags = $env:DT_PROJECT_TAGS
         }
-        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Send-DTBom.ps1" @params
+        $response = & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Send-DTBom.ps1" @params
+        if ($response -and $response.token) {
+          Write-Host "::add-mask::$($response.token)"
+          "upload-token=$($response.token)" >> $env:GITHUB_OUTPUT
+        }
+
+    - name: Wait for DT processing
+      if: inputs.wait-for-processing == 'true' && steps.upload.outputs.upload-token != ''
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_TOKEN: ${{ steps.upload.outputs.upload-token }}
+        DT_TIMEOUT: ${{ inputs.processing-timeout-seconds }}
+        DT_POLL_INTERVAL: ${{ inputs.processing-poll-interval-seconds }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Wait-DTBomProcessing.ps1" `
+          -ServerUrl $env:DT_SERVER_URL `
+          -ApiKey $env:DT_API_KEY `
+          -Token $env:DT_TOKEN `
+          -TimeoutSeconds ([int]$env:DT_TIMEOUT) `
+          -PollIntervalSeconds ([int]$env:DT_POLL_INTERVAL)
 
     - name: Mark project as latest
       if: inputs.mark-latest == 'true'

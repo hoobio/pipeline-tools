@@ -1,0 +1,51 @@
+name: Upload file to GitHub Release
+description: |
+  Attaches a file to a GitHub Release as a release asset, via `gh release upload`.
+  Useful as a follow-up to SBOM generation on a release event so the BOM ships with
+  the release artefacts.
+
+  The runner needs `contents: write` permission and a token with release-edit access
+  (the workflow's `${{ github.token }}` is sufficient for releases in the same repo).
+
+inputs:
+  tag:
+    description: Release tag the file is attached to.
+    required: true
+  file-path:
+    description: Path to the file to upload.
+    required: true
+  repository:
+    description: Target repository (owner/name). Defaults to the current repository.
+    required: false
+    default: ${{ github.repository }}
+  clobber:
+    description: Overwrite the asset if a file with the same name already exists.
+    required: false
+    default: 'true'
+  github-token:
+    description: GitHub token used by `gh`. Defaults to the workflow token.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Upload to release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag }}
+        FILE_PATH: ${{ inputs.file-path }}
+        REPO: ${{ inputs.repository }}
+        CLOBBER: ${{ inputs.clobber }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "$FILE_PATH" ]; then
+          echo "::error::file-path '$FILE_PATH' does not exist"
+          exit 1
+        fi
+        args=("$TAG" "$FILE_PATH" --repo "$REPO")
+        if [ "$CLOBBER" = "true" ]; then
+          args+=(--clobber)
+        fi
+        gh release upload "${args[@]}"
