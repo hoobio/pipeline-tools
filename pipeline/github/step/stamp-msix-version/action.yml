@@ -1,0 +1,27 @@
+name: Stamp MSIX manifest version
+description: |
+  Rewrites the four-part `<Identity Version="X.Y.Z.W"/>` attribute in a
+  `Package.appxmanifest`, so the MSIX produced by `dotnet publish` carries the same
+  version as the release. Accepts either a three-part SemVer (auto-padded with `.0`)
+  or a four-part tuple.
+
+inputs:
+  manifest-path:
+    description: Path to Package.appxmanifest.
+    required: true
+  version:
+    description: Version to stamp (e.g. `1.2.3` or `1.2.3.0`).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Stamp manifest
+      shell: pwsh
+      env:
+        MANIFEST_PATH: ${{ inputs.manifest-path }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/msix/Set-AppxManifestVersion.ps1" `
+          -ManifestPath $env:MANIFEST_PATH `
+          -Version $env:VERSION

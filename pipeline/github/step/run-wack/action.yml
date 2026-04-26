@@ -1,0 +1,69 @@
+name: Run Windows App Certification Kit
+description: |
+  Runs the Windows App Certification Kit (WACK / appcert) against an MSIX package,
+  parses the report, applies an optional exclusion list, and emits a Markdown summary.
+  Designed to be the gate between MSIX build and release publish on Windows runners.
+
+  When `fail-on-real-failure` is `true` the step exits non-zero if any non-excluded
+  test fails. Excluded test failures are surfaced in the summary but do not fail the
+  build.
+
+inputs:
+  msix-path:
+    description: |
+      Directory or file path to scan for an .msix to test. If a directory, the first
+      .msix found recursively is used.
+    required: true
+  report-path:
+    description: Output path for the appcert XML report.
+    required: false
+    default: wack-report.xml
+  exclusions-path:
+    description: |
+      Optional path to a JSON exclusions list. Each entry is an object with a `test`
+      field (the WACK test name) and a `reason` field explaining why it's excluded.
+    required: false
+    default: ''
+  summary-path:
+    description: |
+      Optional path to write a Markdown summary to. If empty and the runner exposes
+      `$GITHUB_STEP_SUMMARY`, the summary is written to that path automatically.
+    required: false
+    default: ''
+  fail-on-real-failure:
+    description: Fail the step if at least one non-excluded test fails.
+    required: false
+    default: 'true'
+  platform:
+    description: Optional label included in the summary header (e.g. `x64`).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Run WACK
+      shell: pwsh
+      env:
+        WACK_MSIX_PATH: ${{ inputs.msix-path }}
+        WACK_REPORT_PATH: ${{ inputs.report-path }}
+        WACK_EXCLUSIONS_PATH: ${{ inputs.exclusions-path }}
+        WACK_SUMMARY_PATH: ${{ inputs.summary-path }}
+        WACK_FAIL_ON_REAL: ${{ inputs.fail-on-real-failure }}
+        WACK_PLATFORM: ${{ inputs.platform }}
+      run: |
+        $params = @{
+          MsixPath   = $env:WACK_MSIX_PATH
+          ReportPath = $env:WACK_REPORT_PATH
+        }
+        if ($env:WACK_EXCLUSIONS_PATH) { $params.ExclusionsPath = $env:WACK_EXCLUSIONS_PATH }
+
+        # Default the summary to GITHUB_STEP_SUMMARY when the caller didn't override.
+        $summary = $env:WACK_SUMMARY_PATH
+        if (-not $summary -and $env:GITHUB_STEP_SUMMARY) { $summary = $env:GITHUB_STEP_SUMMARY }
+        if ($summary) { $params.SummaryPath = $summary }
+
+        if ($env:WACK_PLATFORM) { $params.Platform = $env:WACK_PLATFORM }
+        if ($env:WACK_FAIL_ON_REAL -eq 'true') { $params.FailOnRealFailure = $true }
+
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/msix/Invoke-Wack.ps1" @params
