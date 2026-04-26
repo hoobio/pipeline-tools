@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/hoobio/pipeline-tools/compare/v1.2.0...v1.3.0) (2026-04-26)
+
+
+### Features
+
+* WiX 5 MSI build and sign helpers ([#10](https://github.com/hoobio/pipeline-tools/issues/10)) ([92facc7](https://github.com/hoobio/pipeline-tools/commit/92facc7a33ce037c5e6ded0bfc2dd3869d8cfbba))
+
 ## [1.2.0](https://github.com/hoobio/pipeline-tools/compare/v1.1.0...v1.2.0) (2026-04-26)
 
 
