@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/hoobio/pipeline-tools/compare/v1.3.1...v1.4.0) (2026-04-27)
+
+
+### Features
+
+* **run-wack:** add optional PR comment upsert and report-count outputs ([#14](https://github.com/hoobio/pipeline-tools/issues/14)) ([2464e5a](https://github.com/hoobio/pipeline-tools/commit/2464e5a999d28a115ad22d99178b46a6eb8f364a))
+
+
+### Bug Fixes
+
+* **run-wack:** remove template expressions from descriptions ([#16](https://github.com/hoobio/pipeline-tools/issues/16)) ([39bc336](https://github.com/hoobio/pipeline-tools/commit/39bc3369b013280d31b7efb380b77b4fb715beff))
+
 ## [1.3.1](https://github.com/hoobio/pipeline-tools/compare/v1.3.0...v1.3.1) (2026-04-26)
 
 
