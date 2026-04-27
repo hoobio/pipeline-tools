@@ -8,6 +8,14 @@ description: |
   non-excluded test fails. Excluded test failures are surfaced in the summary but
   do not fail the build.
 
+  The Markdown summary is always written to `$GITHUB_STEP_SUMMARY` (when present),
+  optionally mirrored to `summary-path`, and (by default) upserted as a Markdown
+  PR comment when the workflow is running on a `pull_request` event. The PR comment
+  is keyed by `<!-- wack-bot[-<platform>] -->`, so a matrix run with different
+  `platform` values upserts one comment per platform rather than spamming. Pass
+  `github-token: ${{ github.token }}` to enable the comment, or set
+  `pr-comment: 'false'` to opt out.
+
 inputs:
   msix-path:
     description: |
@@ -26,15 +34,16 @@ inputs:
     default: ''
   summary-path:
     description: |
-      Optional path to write a Markdown summary to. If empty and the runner exposes
-      `$GITHUB_STEP_SUMMARY`, the summary is written to that path automatically.
+      Optional path to also write the Markdown summary to. The summary is always
+      written to `$GITHUB_STEP_SUMMARY` when the runner provides it; use this input
+      when you also want a copy at a known path (e.g. for archival as an artifact).
     required: false
     default: ''
   fail-on-error:
     description: |
       Fail the step if at least one non-excluded test fails. Defaults to `true`.
       Set to `false` on PR runs if you want WACK to surface failures via the PR
-      summary without blocking the merge.
+      summary or comment without blocking the merge.
     required: false
     default: ''
   fail-on-real-failure:
@@ -45,14 +54,56 @@ inputs:
     required: false
     default: ''
   platform:
-    description: Optional label included in the summary header (e.g. `x64`).
+    description: |
+      Optional label included in the summary header and the PR-comment marker
+      (e.g. `x64` / `ARM64`). When `pr-comment` is enabled, the marker becomes
+      `<!-- wack-bot-<platform> -->` so a matrix run upserts one comment per platform.
     required: false
     default: ''
+  pr-comment:
+    description: |
+      When `true` (the default) and the workflow is running on a `pull_request`
+      event, upsert a Markdown comment on the PR with the WACK results. Set to
+      `false` to opt out. The comment is upserted in place across re-runs and
+      across commits to the same PR (matched by the `<!-- wack-bot[-<platform>] -->`
+      marker).
+
+      If `pr-comment=true` but `github-token` is not supplied, the step emits a
+      notice and skips the comment so existing callers that haven't wired the
+      token yet continue to work.
+    required: false
+    default: 'true'
+  github-token:
+    description: |
+      GitHub token used to upsert the PR comment when `pr-comment=true`. Pass
+      `${{ github.token }}` from the calling workflow. Composite action input
+      defaults cannot reference the `github` context, which is why this cannot be
+      defaulted here. When omitted, the PR-comment step is skipped with a notice.
+    required: false
+    default: ''
+
+outputs:
+  summary-path:
+    description: Path to the Markdown summary file produced by the run.
+    value: ${{ steps.run-wack.outputs.summary-path }}
+  passed:
+    description: Number of WACK tests that passed.
+    value: ${{ steps.run-wack.outputs.passed }}
+  failed:
+    description: Number of WACK tests that failed (excluding tests covered by the exclusions list).
+    value: ${{ steps.run-wack.outputs.failed }}
+  excluded:
+    description: Number of WACK test failures suppressed by the exclusions list.
+    value: ${{ steps.run-wack.outputs.excluded }}
+  skipped:
+    description: Number of WACK tests reported as not applicable.
+    value: ${{ steps.run-wack.outputs.skipped }}
 
 runs:
   using: composite
   steps:
-    - name: Run WACK
+    - id: run-wack
+      name: Run WACK
       shell: pwsh
       env:
         WACK_MSIX_PATH: ${{ inputs.msix-path }}
@@ -68,19 +119,114 @@ runs:
           ReportPath = $env:WACK_REPORT_PATH
         }
         if ($env:WACK_EXCLUSIONS_PATH) { $params.ExclusionsPath = $env:WACK_EXCLUSIONS_PATH }
-
-        # Default the summary to GITHUB_STEP_SUMMARY when the caller didn't override.
-        $summary = $env:WACK_SUMMARY_PATH
-        if (-not $summary -and $env:GITHUB_STEP_SUMMARY) { $summary = $env:GITHUB_STEP_SUMMARY }
-        if ($summary) { $params.SummaryPath = $summary }
-
         if ($env:WACK_PLATFORM) { $params.Platform = $env:WACK_PLATFORM }
+
+        # Always write the structured summary to a temp file. Subsequent steps mirror
+        # it to the runner's step summary, the caller's optional summary-path, and a
+        # PR comment when requested.
+        $platformLabel = if ($env:WACK_PLATFORM) { $env:WACK_PLATFORM } else { 'default' }
+        $tempSummary = Join-Path $env:RUNNER_TEMP ("wack-summary-{0}-{1}.md" -f $platformLabel, [guid]::NewGuid().ToString('N'))
+        $params.SummaryPath = $tempSummary
+
+        # The composite handles fail-on-error itself so the PR-comment step still
+        # runs after a failure. Always invoke the script with FailOnRealFailure
+        # disabled and re-evaluate after.
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/msix/Invoke-Wack.ps1" @params
+
+        "summary-path=$tempSummary" | Out-File -Append -LiteralPath $env:GITHUB_OUTPUT
+
+        # Mirror summary to runner step summary (default) and the caller's summary-path.
+        if (Test-Path -LiteralPath $tempSummary) {
+          $content = Get-Content -Raw -LiteralPath $tempSummary
+          if ($env:GITHUB_STEP_SUMMARY) {
+            $content | Out-File -Append -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          }
+          if ($env:WACK_SUMMARY_PATH) {
+            $dir = Split-Path $env:WACK_SUMMARY_PATH -Parent
+            if ($dir) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null }
+            $content | Out-File -LiteralPath $env:WACK_SUMMARY_PATH -Encoding utf8
+          }
+        }
+
+        # Re-parse the report to expose pass/fail/excluded counts as outputs and to
+        # decide whether to fail the step.
+        $passCount = 0; $failCount = 0; $exclCount = 0; $skipCount = 0
+        if (Test-Path -LiteralPath $env:WACK_REPORT_PATH) {
+          [xml]$report = Get-Content -LiteralPath $env:WACK_REPORT_PATH
+          $exMap = @{}
+          if ($env:WACK_EXCLUSIONS_PATH -and (Test-Path -LiteralPath $env:WACK_EXCLUSIONS_PATH)) {
+            (Get-Content -LiteralPath $env:WACK_EXCLUSIONS_PATH | ConvertFrom-Json) | ForEach-Object { $exMap[$_.test] = $_.reason }
+          }
+          $allTests = $report.SelectNodes("//TEST")
+          $passCount = @($allTests | Where-Object { $_.SelectSingleNode("RESULT").InnerText.Trim() -eq 'PASS' }).Count
+          $failNodes = @($allTests | Where-Object { $_.SelectSingleNode("RESULT").InnerText.Trim() -eq 'FAIL' })
+          $exclCount = @($failNodes | Where-Object { $exMap.ContainsKey($_.GetAttribute("NAME")) }).Count
+          $failCount = @($failNodes | Where-Object { -not $exMap.ContainsKey($_.GetAttribute("NAME")) }).Count
+          $skipCount = @($allTests | Where-Object { $_.SelectSingleNode("RESULT").InnerText.Trim() -eq 'NOT_APPLICABLE' }).Count
+        }
+        "passed=$passCount"     | Out-File -Append -LiteralPath $env:GITHUB_OUTPUT
+        "failed=$failCount"     | Out-File -Append -LiteralPath $env:GITHUB_OUTPUT
+        "excluded=$exclCount"   | Out-File -Append -LiteralPath $env:GITHUB_OUTPUT
+        "skipped=$skipCount"    | Out-File -Append -LiteralPath $env:GITHUB_OUTPUT
 
         # Resolve fail-on-error: new input wins, falls back to deprecated alias,
         # defaults to 'true' when neither is set.
         $failChoice = if ($env:WACK_FAIL_ON_ERROR) { $env:WACK_FAIL_ON_ERROR }
                       elseif ($env:WACK_FAIL_ON_REAL) { $env:WACK_FAIL_ON_REAL }
                       else { 'true' }
-        if ($failChoice -eq 'true') { $params.FailOnRealFailure = $true }
+        # Defer the failure exit so the upsert-PR-comment step still runs. The
+        # subsequent step uses `if: always()` and a stored marker file decides
+        # whether to re-fail at the end.
+        if ($failChoice -eq 'true' -and $failCount -gt 0) {
+          $marker = Join-Path $env:RUNNER_TEMP ("wack-shouldfail-{0}.flag" -f $platformLabel)
+          Set-Content -LiteralPath $marker -Value $failCount
+          "shouldfail-marker=$marker" | Out-File -Append -LiteralPath $env:GITHUB_OUTPUT
+        }
 
-        & "$env:GITHUB_ACTION_PATH/../../../../scripts/msix/Invoke-Wack.ps1" @params
+    - name: Upsert WACK PR comment
+      if: always() && inputs.pr-comment == 'true' && github.event_name == 'pull_request'
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        SUMMARY_PATH: ${{ steps.run-wack.outputs.summary-path }}
+        PLATFORM: ${{ inputs.platform }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        if (-not $env:GH_TOKEN) {
+          Write-Host "::notice::pr-comment is enabled but github-token was not supplied; skipping PR comment. Pass github.token via the github-token input to enable."
+          return
+        }
+        if (-not $env:SUMMARY_PATH -or -not (Test-Path -LiteralPath $env:SUMMARY_PATH)) {
+          Write-Warning "Summary file not found; nothing to upsert"
+          return
+        }
+
+        $body = (Get-Content -Raw -LiteralPath $env:SUMMARY_PATH).TrimEnd()
+        $platformSuffix = if ($env:PLATFORM) { "-$env:PLATFORM" } else { '' }
+        $marker = "<!-- wack-bot$platformSuffix -->"
+        if ($body -notlike "*$marker*") { $body = "$body`n`n$marker" }
+
+        # Use ConvertFrom-Json + PowerShell filtering to avoid jq escaping issues
+        # with arbitrary Markdown payloads.
+        $comments = gh api "repos/$env:REPO/issues/$env:PR_NUMBER/comments" --paginate | ConvertFrom-Json
+        $existing = $comments | Where-Object { $_.body -like "*$marker*" } | Select-Object -First 1 -ExpandProperty id -ErrorAction SilentlyContinue
+        if ($existing) {
+          gh api --method PATCH "repos/$env:REPO/issues/comments/$existing" -f body=$body | Out-Null
+          Write-Host "Updated WACK comment ($env:PLATFORM)"
+        } else {
+          gh pr comment $env:PR_NUMBER --body $body --repo $env:REPO | Out-Null
+          Write-Host "Created WACK comment ($env:PLATFORM)"
+        }
+
+    - name: Re-fail the step on non-excluded WACK failures
+      if: always() && steps.run-wack.outputs.shouldfail-marker != ''
+      shell: pwsh
+      env:
+        MARKER_PATH: ${{ steps.run-wack.outputs.shouldfail-marker }}
+        FAIL_COUNT: ${{ steps.run-wack.outputs.failed }}
+      run: |
+        if (Test-Path -LiteralPath $env:MARKER_PATH) {
+          Write-Error "$env:FAIL_COUNT non-excluded WACK test(s) failed"
+          exit 1
+        }
