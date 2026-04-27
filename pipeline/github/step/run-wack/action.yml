@@ -13,8 +13,8 @@ description: |
   PR comment when the workflow is running on a `pull_request` event. The PR comment
   is keyed by `<!-- wack-bot[-<platform>] -->`, so a matrix run with different
   `platform` values upserts one comment per platform rather than spamming. Pass
-  `github-token: ${{ github.token }}` to enable the comment, or set
-  `pr-comment: 'false'` to opt out.
+  the workflow's `github.token` value via the `github-token` input to enable the
+  comment, or set `pr-comment: 'false'` to opt out.
 
 inputs:
   msix-path:
@@ -76,9 +76,10 @@ inputs:
   github-token:
     description: |
       GitHub token used to upsert the PR comment when `pr-comment=true`. Pass
-      `${{ github.token }}` from the calling workflow. Composite action input
-      defaults cannot reference the `github` context, which is why this cannot be
-      defaulted here. When omitted, the PR-comment step is skipped with a notice.
+      the calling workflow's `github.token` value via this input. Composite
+      action input defaults cannot reference the `github` context, which is why
+      this cannot be defaulted here. When omitted, the PR-comment step is
+      skipped with a notice.
     required: false
     default: ''
 
