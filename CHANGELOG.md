@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/hoobio/pipeline-tools/compare/v1.4.0...v1.5.0) (2026-04-30)
+
+
+### Features
+
+* **dt:** add Backstage hierarchy bootstrap and channel routing ([#17](https://github.com/hoobio/pipeline-tools/issues/17)) ([3381c73](https://github.com/hoobio/pipeline-tools/commit/3381c73359b59cb6f0cbcab428fcc8545096f28d))
+
 ## [1.4.0](https://github.com/hoobio/pipeline-tools/compare/v1.3.1...v1.4.0) (2026-04-27)
 
 
