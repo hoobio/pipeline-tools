@@ -70,7 +70,8 @@ inputs:
     required: false
     default: ''
   system:
-    description: Hierarchy mode: mid-level Backstage system. See `domain`.
+    description: |
+      Hierarchy mode: mid-level Backstage system. See `domain`.
     required: false
     default: ''
   component:
@@ -94,7 +95,8 @@ inputs:
     required: false
     default: ''
   parent-version:
-    description: Legacy single-parent mode: parent project version.
+    description: |
+      Legacy single-parent mode: parent project version.
     required: false
     default: ''
 
