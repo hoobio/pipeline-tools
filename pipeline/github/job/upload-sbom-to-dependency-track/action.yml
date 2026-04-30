@@ -196,7 +196,7 @@ runs:
 
     - name: Bootstrap Dependency-Track hierarchy
       if: env.DT_LINKAGE_MODE == 'hierarchy'
-      uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@feat/dt-hierarchy
+      uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@main
       with:
         server-url: ${{ inputs.server-url }}
         api-key: ${{ inputs.api-key }}
