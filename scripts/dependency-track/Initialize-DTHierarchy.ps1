@@ -103,7 +103,17 @@ function New-DTGroupingProject {
         -Method Put `
         -Path '/api/v1/project' `
         -Body $body `
-        -ExpectStatus 200, 201
+        -ExpectStatus 200, 201, 403
+
+    if ($created.StatusCode -eq 403) {
+        $msg = "Dependency-Track refused project create with HTTP 403 for $Name@$Version. " +
+               "The supplied API key lacks PORTFOLIO_MANAGEMENT, required by PUT /api/v1/project. " +
+               "Bootstrap the hierarchy once with an admin key (the script is idempotent: subsequent " +
+               "runs from any key with VIEW_PORTFOLIO will see the projects exist and skip create), " +
+               "or grant PORTFOLIO_MANAGEMENT to the API key in use."
+        Write-Host "::error::$msg"
+        throw $msg
+    }
 
     if (-not $created.Body.uuid) {
         throw "DT create returned no uuid for $Name@$Version"
