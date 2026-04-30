@@ -1,0 +1,69 @@
+name: Bootstrap Dependency-Track hierarchy
+description: |
+  Idempotently creates the Backstage-style Dependency-Track project hierarchy
+  (domain -> system -> component -> channel) above per-build SBOM uploads.
+
+  Layout produced (all classifier APPLICATION):
+
+      <domain>          @ "domain"        (root)
+      <system>          @ "system"        (parent: <domain>@domain)
+      <component>       @ "component"     (parent: <system>@system)
+      <component>       @ <channel>       (parent: <component>@component)   [optional]
+
+  Already-existing projects at any layer are left untouched, so this step is safe to run
+  on every workflow invocation. The first run requires the API key to have
+  PORTFOLIO_MANAGEMENT (PUT /api/v1/project); subsequent runs only need
+  PROJECT_CREATION_UPLOAD because the create path is skipped.
+
+inputs:
+  server-url:
+    description: Dependency-Track server URL including scheme.
+    required: true
+  api-key:
+    description: |
+      Dependency-Track API key. Needs PORTFOLIO_MANAGEMENT on first run, then
+      PROJECT_CREATION_UPLOAD is enough.
+    required: true
+  domain:
+    description: Top-level grouping (Backstage domain).
+    required: true
+  system:
+    description: Mid-level grouping (Backstage system).
+    required: true
+  component:
+    description: |
+      Component name. Reused as the project name for the component umbrella and the
+      channel umbrella so all per-build SBOM uploads share one DT project name.
+    required: true
+  channel:
+    description: |
+      Optional channel below the component (e.g. "release", "prerelease", "ci/main").
+      Created as `<component>@<channel>` linked to the component umbrella. Omit to
+      bootstrap only domain/system/component.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Bootstrap hierarchy
+      shell: pwsh
+      env:
+        DT_SERVER_URL: ${{ inputs.server-url }}
+        DT_API_KEY: ${{ inputs.api-key }}
+        DT_DOMAIN: ${{ inputs.domain }}
+        DT_SYSTEM: ${{ inputs.system }}
+        DT_COMPONENT: ${{ inputs.component }}
+        DT_CHANNEL: ${{ inputs.channel }}
+      run: |
+        $params = @{
+          ServerUrl = $env:DT_SERVER_URL
+          ApiKey    = $env:DT_API_KEY
+          Domain    = $env:DT_DOMAIN
+          System    = $env:DT_SYSTEM
+          Component = $env:DT_COMPONENT
+        }
+        if ($env:DT_CHANNEL) {
+          $params.Channel = $env:DT_CHANNEL
+        }
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Initialize-DTHierarchy.ps1" @params

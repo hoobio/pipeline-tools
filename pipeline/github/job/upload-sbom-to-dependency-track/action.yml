@@ -1,7 +1,7 @@
 name: Upload SBOM to Dependency-Track
 description: |
   Uploads an already-generated CycloneDX BOM to Dependency-Track and orchestrates the
-  follow-up DT operations: workflow-artifact publication, parent project bootstrap,
+  follow-up DT operations: workflow-artifact publication, hierarchy/parent bootstrap,
   child upload with parent linkage, optional `isLatest` flag, and optional pruning of
   stale children.
 
@@ -11,13 +11,22 @@ description: |
   action with whichever generator is appropriate for your project, e.g. the .NET
   helper at `pipeline/github/step/cyclonedx-sbom-dotnet`.
 
+  Two parent-linkage modes are supported. Pick one:
+
+    A. Backstage hierarchy (preferred). Set `domain`, `system`, `component`, and
+       `channel`. The action bootstraps the four-level hierarchy
+       (domain -> system -> component -> channel) and uploads the BOM as a child of
+       `<component>@<channel>`. Project name defaults to `<component>`.
+    B. Legacy single parent. Set `parent-name` and `parent-version` directly. The
+       action bootstraps that one parent via BOM-upload (lower DT permissions).
+
   Steps run by this action:
     1. Optionally publish the BOM as a workflow artifact for inspection.
-    2. Ensure the parent project exists in Dependency-Track (bootstraps via BOM upload
-       if missing, so only PROJECT_CREATION_UPLOAD permission is needed).
-    3. Upload the BOM to the child project, linked to the parent.
+    2. Ensure parent infra exists in Dependency-Track (full hierarchy in mode A,
+       single parent in mode B).
+    3. Upload the BOM to the child project, linked to the channel/parent.
     4. Optionally mark the child project as `isLatest = true`.
-    5. Optionally prune stale children under the parent, keeping only the most recent N.
+    5. Optionally prune stale children under the channel/parent, keeping only N.
 
 inputs:
   bom-path:
@@ -40,8 +49,11 @@ inputs:
     required: true
 
   project-name:
-    description: Child project name.
-    required: true
+    description: |
+      Child project name. Defaults to `component` when running in hierarchy mode and
+      this input is empty.
+    required: false
+    default: ''
   project-version:
     description: Child project version.
     required: true
@@ -50,12 +62,39 @@ inputs:
     required: false
     default: ''
 
+  domain:
+    description: |
+      Hierarchy mode: top-level Backstage domain. When set with `system`, `component`,
+      and `channel`, the action bootstraps the full domain/system/component/channel
+      hierarchy and links the upload as a child of `<component>@<channel>`.
+    required: false
+    default: ''
+  system:
+    description: Hierarchy mode: mid-level Backstage system. See `domain`.
+    required: false
+    default: ''
+  component:
+    description: |
+      Hierarchy mode: component name. Reused as the child project name (and as the
+      project name for the component/channel umbrella nodes) so all per-build SBOM
+      uploads share one DT project name. See `domain`.
+    required: false
+    default: ''
+  channel:
+    description: |
+      Hierarchy mode: channel below the component, e.g. `release`, `prerelease`,
+      `ci/main`. Becomes the parent version for the upload. See `domain`.
+    required: false
+    default: ''
+
   parent-name:
-    description: Parent project name. Empty to skip parent linkage.
+    description: |
+      Legacy single-parent mode: parent project name. Empty to skip parent linkage.
+      Mutually exclusive with `domain`/`system`/`component`/`channel`.
     required: false
     default: ''
   parent-version:
-    description: Parent project version. Empty to skip parent linkage.
+    description: Legacy single-parent mode: parent project version.
     required: false
     default: ''
 
@@ -105,21 +144,78 @@ runs:
         path: ${{ inputs.bom-path }}
         if-no-files-found: error
 
-    - name: Ensure Dependency-Track parent project exists
-      if: inputs.parent-name != '' && inputs.parent-version != ''
+    - name: Resolve linkage mode
+      shell: pwsh
+      env:
+        IN_DOMAIN: ${{ inputs.domain }}
+        IN_SYSTEM: ${{ inputs.system }}
+        IN_COMPONENT: ${{ inputs.component }}
+        IN_CHANNEL: ${{ inputs.channel }}
+        IN_PARENT_NAME: ${{ inputs.parent-name }}
+        IN_PARENT_VERSION: ${{ inputs.parent-version }}
+        IN_PROJECT_NAME: ${{ inputs.project-name }}
+      run: |
+        $hierarchyParts = @($env:IN_DOMAIN, $env:IN_SYSTEM, $env:IN_COMPONENT, $env:IN_CHANNEL)
+        $hierarchySet = ($hierarchyParts | Where-Object { $_ }).Count
+        $legacySet = if ($env:IN_PARENT_NAME -and $env:IN_PARENT_VERSION) { 1 } else { 0 }
+
+        if ($hierarchySet -gt 0 -and $hierarchySet -lt 4) {
+          throw 'Hierarchy mode requires all of domain, system, component, channel to be set.'
+        }
+        if ($hierarchySet -eq 4 -and ($env:IN_PARENT_NAME -or $env:IN_PARENT_VERSION)) {
+          throw 'Hierarchy mode (domain/system/component/channel) and legacy parent-name/parent-version are mutually exclusive.'
+        }
+
+        if ($hierarchySet -eq 4) {
+          "DT_LINKAGE_MODE=hierarchy"                  | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "DT_EFFECTIVE_PARENT_NAME=$env:IN_COMPONENT" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "DT_EFFECTIVE_PARENT_VERSION=$env:IN_CHANNEL"| Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          $effectiveProjectName = if ($env:IN_PROJECT_NAME) { $env:IN_PROJECT_NAME } else { $env:IN_COMPONENT }
+          "DT_EFFECTIVE_PROJECT_NAME=$effectiveProjectName" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+        }
+        elseif ($legacySet -eq 1) {
+          if (-not $env:IN_PROJECT_NAME) {
+            throw 'project-name is required in legacy parent mode.'
+          }
+          "DT_LINKAGE_MODE=legacy"                          | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "DT_EFFECTIVE_PARENT_NAME=$env:IN_PARENT_NAME"    | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "DT_EFFECTIVE_PARENT_VERSION=$env:IN_PARENT_VERSION" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "DT_EFFECTIVE_PROJECT_NAME=$env:IN_PROJECT_NAME"  | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+        }
+        else {
+          if (-not $env:IN_PROJECT_NAME) {
+            throw 'project-name is required when no parent linkage is configured.'
+          }
+          "DT_LINKAGE_MODE=none"                            | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "DT_EFFECTIVE_PARENT_NAME="                       | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "DT_EFFECTIVE_PARENT_VERSION="                    | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "DT_EFFECTIVE_PROJECT_NAME=$env:IN_PROJECT_NAME"  | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+        }
+
+    - name: Bootstrap Dependency-Track hierarchy
+      if: env.DT_LINKAGE_MODE == 'hierarchy'
+      uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@feat/dt-hierarchy
+      with:
+        server-url: ${{ inputs.server-url }}
+        api-key: ${{ inputs.api-key }}
+        domain: ${{ inputs.domain }}
+        system: ${{ inputs.system }}
+        component: ${{ inputs.component }}
+        channel: ${{ inputs.channel }}
+
+    - name: Ensure Dependency-Track parent project exists (legacy mode)
+      if: env.DT_LINKAGE_MODE == 'legacy'
       shell: pwsh
       env:
         DT_SERVER_URL: ${{ inputs.server-url }}
         DT_API_KEY: ${{ inputs.api-key }}
-        DT_PROJECT_NAME: ${{ inputs.parent-name }}
-        DT_PROJECT_VERSION: ${{ inputs.parent-version }}
         DT_BOM_PATH: ${{ inputs.bom-path }}
       run: |
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Initialize-DTParentProject.ps1" `
           -ServerUrl $env:DT_SERVER_URL `
           -ApiKey $env:DT_API_KEY `
-          -ProjectName $env:DT_PROJECT_NAME `
-          -ProjectVersion $env:DT_PROJECT_VERSION `
+          -ProjectName $env:DT_EFFECTIVE_PARENT_NAME `
+          -ProjectVersion $env:DT_EFFECTIVE_PARENT_VERSION `
           -BomPath $env:DT_BOM_PATH
 
     - id: upload
@@ -128,24 +224,21 @@ runs:
       env:
         DT_SERVER_URL: ${{ inputs.server-url }}
         DT_API_KEY: ${{ inputs.api-key }}
-        DT_PROJECT_NAME: ${{ inputs.project-name }}
         DT_PROJECT_VERSION: ${{ inputs.project-version }}
         DT_BOM_PATH: ${{ inputs.bom-path }}
-        DT_PARENT_NAME: ${{ inputs.parent-name }}
-        DT_PARENT_VERSION: ${{ inputs.parent-version }}
         DT_PROJECT_TAGS: ${{ inputs.project-tags }}
       run: |
         $params = @{
           ServerUrl      = $env:DT_SERVER_URL
           ApiKey         = $env:DT_API_KEY
-          ProjectName    = $env:DT_PROJECT_NAME
+          ProjectName    = $env:DT_EFFECTIVE_PROJECT_NAME
           ProjectVersion = $env:DT_PROJECT_VERSION
           BomPath        = $env:DT_BOM_PATH
           AutoCreate     = $true
         }
-        if ($env:DT_PARENT_NAME -and $env:DT_PARENT_VERSION) {
-          $params.ParentName    = $env:DT_PARENT_NAME
-          $params.ParentVersion = $env:DT_PARENT_VERSION
+        if ($env:DT_EFFECTIVE_PARENT_NAME -and $env:DT_EFFECTIVE_PARENT_VERSION) {
+          $params.ParentName    = $env:DT_EFFECTIVE_PARENT_NAME
+          $params.ParentVersion = $env:DT_EFFECTIVE_PARENT_VERSION
         }
         if ($env:DT_PROJECT_TAGS) {
           $params.ProjectTags = $env:DT_PROJECT_TAGS
@@ -179,28 +272,25 @@ runs:
       env:
         DT_SERVER_URL: ${{ inputs.server-url }}
         DT_API_KEY: ${{ inputs.api-key }}
-        DT_PROJECT_NAME: ${{ inputs.project-name }}
         DT_PROJECT_VERSION: ${{ inputs.project-version }}
       run: |
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Set-DTProjectLatest.ps1" `
           -ServerUrl $env:DT_SERVER_URL `
           -ApiKey $env:DT_API_KEY `
-          -ProjectName $env:DT_PROJECT_NAME `
+          -ProjectName $env:DT_EFFECTIVE_PROJECT_NAME `
           -ProjectVersion $env:DT_PROJECT_VERSION
 
     - name: Prune stale child projects under parent
-      if: inputs.prune-stale-children == 'true' && inputs.parent-name != '' && inputs.parent-version != ''
+      if: inputs.prune-stale-children == 'true' && env.DT_LINKAGE_MODE != 'none'
       shell: pwsh
       env:
         DT_SERVER_URL: ${{ inputs.server-url }}
         DT_API_KEY: ${{ inputs.api-key }}
-        DT_PARENT_NAME: ${{ inputs.parent-name }}
-        DT_PARENT_VERSION: ${{ inputs.parent-version }}
         DT_KEEP: ${{ inputs.keep }}
       run: |
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Remove-DTStaleChildren.ps1" `
           -ServerUrl $env:DT_SERVER_URL `
           -ApiKey $env:DT_API_KEY `
-          -ParentName $env:DT_PARENT_NAME `
-          -ParentVersion $env:DT_PARENT_VERSION `
+          -ParentName $env:DT_EFFECTIVE_PARENT_NAME `
+          -ParentVersion $env:DT_EFFECTIVE_PARENT_VERSION `
           -Keep ([int]$env:DT_KEEP)
