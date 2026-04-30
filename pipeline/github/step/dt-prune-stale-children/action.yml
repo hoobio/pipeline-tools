@@ -10,7 +10,10 @@ inputs:
     description: Dependency-Track server URL including scheme.
     required: true
   api-key:
-    description: Dependency-Track API key with project-delete permission.
+    description: |
+      Dependency-Track API key. Must hold PORTFOLIO_MANAGEMENT (the only permission
+      that grants project DELETE). A 403 here means the key is missing this
+      permission; the step fails fast rather than silently skipping prunes.
     required: true
   parent-name:
     description: Parent project name.
