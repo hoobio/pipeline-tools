@@ -17,7 +17,9 @@ success on any 2xx code.
 Base URL including scheme.
 
 .PARAMETER ApiKey
-DT API key with PORTFOLIO_MANAGEMENT or equivalent project-delete permission.
+DT API key with PORTFOLIO_MANAGEMENT permission. The key needs DELETE rights on
+projects; lower-privilege keys (e.g. PROJECT_CREATION_UPLOAD only) hit HTTP 403 and the
+script aborts with an actionable error.
 
 .PARAMETER ParentName
 Parent project name.
@@ -81,22 +83,37 @@ if ($all.Count -le $Keep) {
 
 $stale = $all | Select-Object -Skip $Keep
 $deleted = 0
-$failed = 0
+$skipped404 = 0
 foreach ($child in $stale) {
     if (-not $child.uuid) { continue }
-    try {
-        & $invokeRest `
-            -ServerUrl $ServerUrl `
-            -ApiKey $ApiKey `
-            -Method Delete `
-            -Path "/api/v1/project/$($child.uuid)" `
-            -ExpectStatus 200, 202, 204 | Out-Null
-        $deleted++
+
+    # Accept 403 here so we can surface a single, specific error instead of one
+    # generic warning per child. 404 is benign (another runner won the race).
+    $resp = & $invokeRest `
+        -ServerUrl $ServerUrl `
+        -ApiKey $ApiKey `
+        -Method Delete `
+        -Path "/api/v1/project/$($child.uuid)" `
+        -ExpectStatus 200, 202, 204, 403, 404
+
+    if ($resp.StatusCode -eq 403) {
+        $msg = "Dependency-Track refused project DELETE with HTTP 403. The supplied API key " +
+               "lacks the PORTFOLIO_MANAGEMENT permission required to delete projects. " +
+               "Grant it under Administration > Access Management > Teams > Permissions, " +
+               "or run prune-stale-children with an admin key. Aborting prune to avoid " +
+               "spamming the rest of $($stale.Count) children."
+        Write-Information "::error::$msg" -InformationAction Continue
+        throw $msg
     }
-    catch {
-        Write-Warning "Failed to delete child uuid $($child.uuid): $($_.Exception.Message)"
-        $failed++
+
+    if ($resp.StatusCode -eq 404) {
+        $skipped404++
+        continue
     }
+
+    $deleted++
 }
 
-Write-Information "Pruned $deleted stale child(ren) under $ParentName@$ParentVersion; kept $Keep most recent ($failed failures)" -InformationAction Continue
+$summary = "Pruned $deleted stale child(ren) under $ParentName@$ParentVersion; kept $Keep most recent"
+if ($skipped404 -gt 0) { $summary += " ($skipped404 already gone)" }
+Write-Information $summary -InformationAction Continue

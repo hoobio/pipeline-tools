@@ -51,12 +51,18 @@ if ($lookup.StatusCode -eq 404 -or -not $lookup.Body.uuid) {
 
 $uuid = $lookup.Body.uuid
 
-& $invokeRest `
+# 304 Not Modified: the project is already isLatest, the PATCH was a no-op. DT signals
+# this with 304 instead of 200, which is fine for our purposes.
+$resp = & $invokeRest `
     -ServerUrl $ServerUrl `
     -ApiKey $ApiKey `
     -Method Patch `
     -Path "/api/v1/project/$uuid" `
     -Body @{ isLatest = $true } `
-    -ExpectStatus 200, 204 | Out-Null
+    -ExpectStatus 200, 204, 304
 
-Write-Information "Marked $ProjectName@$ProjectVersion (uuid $uuid) as latest" -InformationAction Continue
+if ($resp.StatusCode -eq 304) {
+    Write-Information "$ProjectName@$ProjectVersion (uuid $uuid) was already latest" -InformationAction Continue
+} else {
+    Write-Information "Marked $ProjectName@$ProjectVersion (uuid $uuid) as latest" -InformationAction Continue
+}
