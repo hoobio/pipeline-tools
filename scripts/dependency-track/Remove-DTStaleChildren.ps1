@@ -102,7 +102,7 @@ foreach ($child in $stale) {
                "Grant it under Administration > Access Management > Teams > Permissions, " +
                "or run prune-stale-children with an admin key. Aborting prune to avoid " +
                "spamming the rest of $($stale.Count) children."
-        Write-Host "::error::$msg"
+        Write-Information "::error::$msg" -InformationAction Continue
         throw $msg
     }
 

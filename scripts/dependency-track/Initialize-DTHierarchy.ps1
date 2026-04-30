@@ -58,7 +58,12 @@ $ErrorActionPreference = 'Stop'
 $invokeRest = Join-Path -Path $PSScriptRoot -ChildPath 'private/Invoke-DTRestMethod.ps1'
 
 function Get-DTProjectUuid {
-    param([string]$Name, [string]$Version)
+    param(
+        [string]$ServerUrl,
+        [string]$ApiKey,
+        [string]$Name,
+        [string]$Version
+    )
 
     $lookup = & $invokeRest `
         -ServerUrl $ServerUrl `
@@ -75,23 +80,30 @@ function Get-DTProjectUuid {
 }
 
 function New-DTGroupingProject {
+    [CmdletBinding(SupportsShouldProcess)]
     param(
+        [string]$ServerUrl,
+        [string]$ApiKey,
         [string]$Name,
         [string]$Version,
         [string]$ParentUuid
     )
 
-    $existing = Get-DTProjectUuid -Name $Name -Version $Version
+    $existing = Get-DTProjectUuid -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Name -Version $Version
     if ($existing) {
         Write-Information "Hierarchy node $Name@$Version already exists ($existing)" -InformationAction Continue
         return $existing
     }
 
+    if (-not $PSCmdlet.ShouldProcess("$Name@$Version", 'Create grouping project')) {
+        return $null
+    }
+
     $body = [ordered]@{
-        name           = $Name
-        version        = $Version
-        classifier     = 'APPLICATION'
-        description    = "Grouping node ($Version) for $Name"
+        name        = $Name
+        version     = $Version
+        classifier  = 'APPLICATION'
+        description = "Grouping node ($Version) for $Name"
     }
     if ($ParentUuid) {
         $body.parent = @{ uuid = $ParentUuid }
@@ -111,7 +123,7 @@ function New-DTGroupingProject {
                "Bootstrap the hierarchy once with an admin key (the script is idempotent: subsequent " +
                "runs from any key with VIEW_PORTFOLIO will see the projects exist and skip create), " +
                "or grant PORTFOLIO_MANAGEMENT to the API key in use."
-        Write-Host "::error::$msg"
+        Write-Information "::error::$msg" -InformationAction Continue
         throw $msg
     }
 
@@ -123,10 +135,10 @@ function New-DTGroupingProject {
     return $created.Body.uuid
 }
 
-$domainUuid    = New-DTGroupingProject -Name $Domain    -Version 'domain'    -ParentUuid $null
-$systemUuid    = New-DTGroupingProject -Name $System    -Version 'system'    -ParentUuid $domainUuid
-$componentUuid = New-DTGroupingProject -Name $Component -Version 'component' -ParentUuid $systemUuid
+$domainUuid    = New-DTGroupingProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Domain    -Version 'domain'    -ParentUuid $null
+$systemUuid    = New-DTGroupingProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $System    -Version 'system'    -ParentUuid $domainUuid
+$componentUuid = New-DTGroupingProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Component -Version 'component' -ParentUuid $systemUuid
 
 if ($Channel) {
-    $null = New-DTGroupingProject -Name $Component -Version $Channel -ParentUuid $componentUuid
+    $null = New-DTGroupingProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Component -Version $Channel -ParentUuid $componentUuid
 }
