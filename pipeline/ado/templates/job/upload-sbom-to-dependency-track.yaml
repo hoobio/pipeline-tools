@@ -169,8 +169,11 @@ jobs:
           specVersion:  ${{ parameters.specVersion }}
           toolVersion:  ${{ parameters.cyclonedxToolVersion }}
 
+      # Suffix the artifact with $(System.JobAttempt) so "Re-run failed jobs"
+      # from the ADO UI doesn't collide with the artifact published on the
+      # earlier attempt. First-attempt artifacts get the suffix `-1`.
       - publish: ${{ parameters.bomPath }}
-        artifact: ${{ parameters.bomArtifactName }}
+        artifact: ${{ parameters.bomArtifactName }}-$(System.JobAttempt)
         displayName: Publish BOM artifact
 
       - template: ../step/dt/initialize-hierarchy.yaml
