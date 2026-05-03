@@ -2,7 +2,7 @@
 
 Reusable CI/CD pipeline templates and PowerShell scripts. Targets GitHub Actions and Azure DevOps Pipelines, sharing PowerShell logic between the two.
 
-> **This repository is public.** Read [`CLAUDE.md`](CLAUDE.md) before contributing - never commit hostnames, IPs, API keys, personal names, or other identifiable information.
+> **This repository is public.** Read [`AGENTS.md`](AGENTS.md) before contributing - never commit hostnames, IPs, API keys, personal names, or other identifiable information.
 
 ## Layout
 
@@ -180,7 +180,7 @@ PR titles are validated against Conventional Commits by `.github/workflows/pr-ti
 
 ## Contributing
 
-1. Read [`CLAUDE.md`](CLAUDE.md) carefully.
+1. Read [`AGENTS.md`](AGENTS.md) carefully.
 2. PowerShell only for new scripts; no Bash, no Python.
 3. Conventional Commits, no emoji, no AB# suffix.
 4. Manually review the diff before push - especially for hardcoded URLs, IPs, names.

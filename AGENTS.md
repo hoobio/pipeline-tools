@@ -65,7 +65,6 @@ scripts/
   dependency-track/                      # PowerShell helpers for DT REST API
   sbom/                                  # PowerShell helpers for SBOM generation
 .github/
-  copilot-instructions.md                # Mirrors this file for GitHub Copilot
   dependabot.yml                         # Dependency updates
   workflows/                             # Repo's own CI (lint, validate)
 ```
@@ -101,7 +100,7 @@ A PR that adds something to one platform without the other is incomplete. Review
 
 ## Tech preferences for this repo
 
-- PowerShell for all scripts (per `~/.claude/CLAUDE.md`).
+- PowerShell for all scripts.
 - 2-space YAML indentation.
 - Conventional Commits (no AB# suffix; this is not a Nintex repo).
 - No emoji / no gitmoji in commit messages or PR titles.
