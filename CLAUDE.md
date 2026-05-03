@@ -78,6 +78,27 @@ GitHub Actions composite actions live as directories containing an `action.yml`.
 
 Reusable GitHub *workflows* (the `workflow_call` kind) cannot live outside `.github/workflows/` due to a GitHub platform constraint, so the `pipeline/github/job/` directory uses composite actions instead. They behave like a "job" by orchestrating several steps under one action.
 
+## Cross-platform parity (GitHub <-> Azure DevOps)
+
+Every reusable building block ships in both flavours, both wrapping the same PowerShell script in `scripts/`. When you add or change anything under `pipeline/`, update both sides in the same PR:
+
+| Concept | GitHub Actions location | Azure DevOps location |
+|---|---|---|
+| Step (single concern) | `pipeline/github/step/<name>/action.yml` | `pipeline/ado/templates/step/<group>/<name>.yaml` |
+| Job (orchestrating multiple steps) | `pipeline/github/job/<name>/action.yml` | `pipeline/ado/templates/job/<name>.yaml` |
+| Underlying logic | `scripts/<group>/Verb-Noun.ps1` (single source of truth) | _(same script, called from both)_ |
+
+Concretely, when you add a new feature:
+
+1. **Write the PowerShell script first** under `scripts/`. Pin its parameter names; both wrappers refer to them.
+2. **Add the GitHub composite action** under `pipeline/github/`. Use `inputs:` with descriptions; route values to the script via `env:`.
+3. **Add the matching ADO template** under `pipeline/ado/templates/`. Use `parameters:` with `displayName`s; route values to the script via `env:` (ADO refuses to substitute secret variables into a script body, so `env:` mapping is mandatory).
+4. **Keep input names equivalent across the two**: if the GitHub action takes `server-url`, the ADO parameter is `serverUrl` (kebab-case <-> camelCase is fine, but the meaning must match exactly).
+5. **Mirror documentation**: README's "GitHub Actions" section and "Azure DevOps Pipelines" section should show equivalent examples.
+6. **Mirror orchestrator parameters**: if the GitHub job action gets a new input (e.g. `mark-latest`), the ADO job template gets the same parameter (`markLatest`).
+
+A PR that adds something to one platform without the other is incomplete. Reviewers should reject single-platform changes for features that have a cross-platform analog.
+
 ## Tech preferences for this repo
 
 - PowerShell for all scripts (per `~/.claude/CLAUDE.md`).

@@ -35,6 +35,26 @@ Allowed:
 - Tests / fixtures: synthetic data only.
 - Commit messages: describe the change, not the author. Conventional Commits, no emoji.
 
+## Cross-platform parity (GitHub <-> Azure DevOps)
+
+Every reusable building block ships in both flavours, both wrapping the same PowerShell script in `scripts/`. When you add or change anything under `pipeline/`, update both sides in the same PR.
+
+| Concept | GitHub Actions | Azure DevOps |
+|---|---|---|
+| Step | `pipeline/github/step/<name>/action.yml` | `pipeline/ado/templates/step/<group>/<name>.yaml` |
+| Job | `pipeline/github/job/<name>/action.yml` | `pipeline/ado/templates/job/<name>.yaml` |
+| Logic | `scripts/<group>/Verb-Noun.ps1` (single source of truth) | _(same script, called from both)_ |
+
+Workflow when adding a new feature:
+
+1. Write the PowerShell script first under `scripts/`. Both wrappers refer to its parameters.
+2. Add the GitHub composite action; route values via `env:`.
+3. Add the matching ADO template; route values via `env:` (ADO refuses to substitute secret variables into script bodies, so `env:` mapping is mandatory).
+4. Keep input names equivalent (kebab-case `server-url` <-> camelCase `serverUrl` is fine, meaning must match).
+5. Mirror README sections and orchestrator parameters.
+
+A PR that adds something to one platform without the other is incomplete.
+
 ## Tech preferences
 
 - PowerShell for scripts (preferred over Bash / Python).
