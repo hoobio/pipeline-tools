@@ -7,7 +7,7 @@ Bootstraps a Backstage-style Dependency-Track project hierarchy
 
 .DESCRIPTION
 Creates the four grouping projects that sit above per-build SBOM uploads, in order, each
-linked to the one above it. Already-existing projects are left untouched. Layout:
+linked to the one above it. Layout:
 
     <Domain>          @ "domain"        (root)
     <System>          @ "system"        (parent: <Domain>@domain)
@@ -18,16 +18,19 @@ Where <Channel> is a free-form bucket such as "release", "prerelease", or "ci/ma
 
 The DT project create endpoint (PUT /api/v1/project) is used because BOM-upload bootstrap
 would attach the supplied BOM to the grouping project, which is misleading for an empty
-container. PUT requires PORTFOLIO_MANAGEMENT, but only the *first* run from a new
-deployment needs that permission; subsequent CI uploads see all four projects already in
-place and skip the create path entirely.
+container. PUT requires PORTFOLIO_MANAGEMENT.
+
+The script is fully idempotent. Each grouping node is created with its target classifier
+and collection-logic if absent; if already present, it is patched to match the desired
+state on every run. This means running the script after upgrading the desired
+classifier/collection-logic will quietly bring the hierarchy in line with the new spec.
 
 .PARAMETER ServerUrl
 Base URL including scheme.
 
 .PARAMETER ApiKey
-DT API key. Needs PORTFOLIO_MANAGEMENT for the initial create; PROJECT_CREATION_UPLOAD is
-sufficient on subsequent runs (no-op path).
+DT API key. Needs PORTFOLIO_MANAGEMENT to create or patch grouping projects;
+PROJECT_CREATION_UPLOAD is sufficient on subsequent no-op runs (everything aligned).
 
 .PARAMETER Domain
 Top-level grouping (Backstage domain).
@@ -42,6 +45,26 @@ umbrella so they sort together in the DT portfolio view.
 .PARAMETER Channel
 Optional fourth-level bucket below the component (e.g. "release", "prerelease",
 "ci/main"). Skipped when omitted.
+
+.PARAMETER Classifier
+DT project classifier applied to every grouping node. Defaults to PLATFORM, which
+matches the role of these nodes (umbrellas, not real applications).
+
+.PARAMETER DomainCollectionLogic
+Collection logic applied to the domain umbrella. Defaults to AGGREGATE_DIRECT_CHILDREN.
+
+.PARAMETER SystemCollectionLogic
+Collection logic applied to the system umbrella. Defaults to AGGREGATE_DIRECT_CHILDREN.
+
+.PARAMETER ComponentCollectionLogic
+Collection logic applied to the component umbrella. Defaults to
+AGGREGATE_LATEST_VERSION_CHILDREN, so the component view rolls up only the latest
+version of each channel.
+
+.PARAMETER ChannelCollectionLogic
+Collection logic applied to the channel umbrella. Defaults to
+AGGREGATE_LATEST_VERSION_CHILDREN, so the channel view rolls up only the latest
+per-build SBOM upload (which is what most consumers expect).
 #>
 [CmdletBinding()]
 param(
@@ -50,14 +73,34 @@ param(
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$Domain,
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$System,
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$Component,
-    [Parameter(Mandatory = $false)] [string]$Channel
+    [Parameter(Mandatory = $false)] [string]$Channel,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('APPLICATION','FRAMEWORK','LIBRARY','CONTAINER','OPERATING_SYSTEM','DEVICE','FIRMWARE','FILE','PLATFORM','DEVICE_DRIVER','MACHINE_LEARNING_MODEL','DATA','CRYPTOGRAPHIC_ASSET')]
+    [string]$Classifier = 'PLATFORM',
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]
+    [string]$DomainCollectionLogic = 'AGGREGATE_DIRECT_CHILDREN',
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]
+    [string]$SystemCollectionLogic = 'AGGREGATE_DIRECT_CHILDREN',
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]
+    [string]$ComponentCollectionLogic = 'AGGREGATE_LATEST_VERSION_CHILDREN',
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]
+    [string]$ChannelCollectionLogic = 'AGGREGATE_LATEST_VERSION_CHILDREN'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $invokeRest = Join-Path -Path $PSScriptRoot -ChildPath 'private/Invoke-DTRestMethod.ps1'
 
-function Get-DTProjectUuid {
+function Get-DTProject {
     param(
         [string]$ServerUrl,
         [string]$ApiKey,
@@ -74,25 +117,84 @@ function Get-DTProjectUuid {
         -ExpectStatus 200, 404
 
     if ($lookup.StatusCode -eq 200 -and $lookup.Body.uuid) {
-        return $lookup.Body.uuid
+        return $lookup.Body
     }
     return $null
 }
 
-function New-DTGroupingProject {
+function Update-DTProject {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$ServerUrl,
+        [string]$ApiKey,
+        [string]$Uuid,
+        [string]$Name,
+        [string]$Version,
+        [hashtable]$Patch
+    )
+
+    if (-not $Patch -or $Patch.Count -eq 0) { return }
+
+    $summary = ($Patch.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', '
+    if (-not $PSCmdlet.ShouldProcess("$Name@$Version", "Patch fields ($summary)")) {
+        return
+    }
+
+    $resp = & $invokeRest `
+        -ServerUrl $ServerUrl `
+        -ApiKey $ApiKey `
+        -Method Patch `
+        -Path "/api/v1/project/$Uuid" `
+        -Body $Patch `
+        -ExpectStatus 200, 304, 403
+
+    if ($resp.StatusCode -eq 403) {
+        $msg = "Dependency-Track refused project update with HTTP 403 for $Name@$Version. " +
+               "The supplied API key lacks PORTFOLIO_MANAGEMENT, required by PATCH /api/v1/project/{uuid}. " +
+               "Run the hierarchy bootstrap once with an admin key to align the project."
+        Write-Information "::error::$msg" -InformationAction Continue
+        throw $msg
+    }
+
+    Write-Information "Updated $Name@$Version ($summary)" -InformationAction Continue
+}
+
+function Sync-DTGroupingProject {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$ServerUrl,
         [string]$ApiKey,
         [string]$Name,
         [string]$Version,
-        [string]$ParentUuid
+        [string]$ParentUuid,
+        [string]$DesiredClassifier,
+        [string]$DesiredCollectionLogic
     )
 
-    $existing = Get-DTProjectUuid -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Name -Version $Version
+    $existing = Get-DTProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Name -Version $Version
     if ($existing) {
-        Write-Information "Hierarchy node $Name@$Version already exists ($existing)" -InformationAction Continue
-        return $existing
+        $patch = @{}
+        if ($existing.classifier -ne $DesiredClassifier) {
+            $patch.classifier = $DesiredClassifier
+        }
+        if ($existing.collectionLogic -ne $DesiredCollectionLogic) {
+            $patch.collectionLogic = $DesiredCollectionLogic
+        }
+
+        if ($patch.Count -gt 0) {
+            Write-Information "Hierarchy node $Name@$Version drift detected; aligning ($($patch.Keys -join ', '))" -InformationAction Continue
+            Update-DTProject `
+                -ServerUrl $ServerUrl `
+                -ApiKey $ApiKey `
+                -Uuid $existing.uuid `
+                -Name $Name `
+                -Version $Version `
+                -Patch $patch
+        }
+        else {
+            Write-Information "Hierarchy node $Name@$Version already aligned ($($existing.uuid))" -InformationAction Continue
+        }
+        return $existing.uuid
     }
 
     if (-not $PSCmdlet.ShouldProcess("$Name@$Version", 'Create grouping project')) {
@@ -100,10 +202,11 @@ function New-DTGroupingProject {
     }
 
     $body = [ordered]@{
-        name        = $Name
-        version     = $Version
-        classifier  = 'APPLICATION'
-        description = "Grouping node ($Version) for $Name"
+        name             = $Name
+        version          = $Version
+        classifier       = $DesiredClassifier
+        collectionLogic  = $DesiredCollectionLogic
+        description      = "Grouping node ($Version) for $Name"
     }
     if ($ParentUuid) {
         $body.parent = @{ uuid = $ParentUuid }
@@ -131,14 +234,28 @@ function New-DTGroupingProject {
         throw "DT create returned no uuid for $Name@$Version"
     }
 
-    Write-Information "Created hierarchy node $Name@$Version ($($created.Body.uuid))" -InformationAction Continue
+    Write-Information "Created hierarchy node $Name@$Version (classifier=$DesiredClassifier, collectionLogic=$DesiredCollectionLogic, $($created.Body.uuid))" -InformationAction Continue
     return $created.Body.uuid
 }
 
-$domainUuid    = New-DTGroupingProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Domain    -Version 'domain'    -ParentUuid $null
-$systemUuid    = New-DTGroupingProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $System    -Version 'system'    -ParentUuid $domainUuid
-$componentUuid = New-DTGroupingProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Component -Version 'component' -ParentUuid $systemUuid
+$domainUuid = Sync-DTGroupingProject `
+    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+    -Name $Domain -Version 'domain' -ParentUuid $null `
+    -DesiredClassifier $Classifier -DesiredCollectionLogic $DomainCollectionLogic
+
+$systemUuid = Sync-DTGroupingProject `
+    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+    -Name $System -Version 'system' -ParentUuid $domainUuid `
+    -DesiredClassifier $Classifier -DesiredCollectionLogic $SystemCollectionLogic
+
+$componentUuid = Sync-DTGroupingProject `
+    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+    -Name $Component -Version 'component' -ParentUuid $systemUuid `
+    -DesiredClassifier $Classifier -DesiredCollectionLogic $ComponentCollectionLogic
 
 if ($Channel) {
-    $null = New-DTGroupingProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Component -Version $Channel -ParentUuid $componentUuid
+    $null = Sync-DTGroupingProject `
+        -ServerUrl $ServerUrl -ApiKey $ApiKey `
+        -Name $Component -Version $Channel -ParentUuid $componentUuid `
+        -DesiredClassifier $Classifier -DesiredCollectionLogic $ChannelCollectionLogic
 }
