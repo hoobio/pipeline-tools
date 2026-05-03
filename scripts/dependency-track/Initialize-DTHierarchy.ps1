@@ -149,11 +149,18 @@ function Update-DTProject {
         -ExpectStatus 200, 304, 403
 
     if ($resp.StatusCode -eq 403) {
+        # Drift correction is best-effort. The project already exists, so failing
+        # the build because the CI key lacks PORTFOLIO_MANAGEMENT would block
+        # consumers from upgrading just to align an umbrella's classifier or
+        # collection-logic. Surface the situation as a warning, leave the project
+        # on its existing config, and let an operator run once with an admin key
+        # when they choose to migrate.
         $msg = "Dependency-Track refused project update with HTTP 403 for $Name@$Version. " +
                "The supplied API key lacks PORTFOLIO_MANAGEMENT, required by PATCH /api/v1/project/{uuid}. " +
-               "Run the hierarchy bootstrap once with an admin key to align the project."
-        Write-Information "::error::$msg" -InformationAction Continue
-        throw $msg
+               "Leaving $Name@$Version on its existing config. Run the hierarchy bootstrap " +
+               "once with an admin key (or grant PORTFOLIO_MANAGEMENT) to align ($summary)."
+        Write-Warning $msg
+        return
     }
 
     Write-Information "Updated $Name@$Version ($summary)" -InformationAction Continue
