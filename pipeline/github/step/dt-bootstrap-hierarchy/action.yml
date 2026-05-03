@@ -3,17 +3,18 @@ description: |
   Idempotently creates the Backstage-style Dependency-Track project hierarchy
   (domain -> system -> component -> channel) above per-build SBOM uploads.
 
-  Layout produced (all classifier APPLICATION):
+  Layout produced (default classifier PLATFORM):
 
       <domain>          @ "domain"        (root)
       <system>          @ "system"        (parent: <domain>@domain)
       <component>       @ "component"     (parent: <system>@system)
       <component>       @ <channel>       (parent: <component>@component)   [optional]
 
-  Already-existing projects at any layer are left untouched, so this step is safe to run
-  on every workflow invocation. The first run requires the API key to have
-  PORTFOLIO_MANAGEMENT (PUT /api/v1/project); subsequent runs only need
-  PROJECT_CREATION_UPLOAD because the create path is skipped.
+  Each grouping node is created with the desired classifier and collection-logic;
+  if the node already exists with different values, the script PATCHes it back into
+  shape. The first run requires the API key to have PORTFOLIO_MANAGEMENT
+  (PUT /api/v1/project, PATCH /api/v1/project/{uuid}); subsequent no-op runs only
+  need PROJECT_CREATION_UPLOAD because the create and patch paths are skipped.
 
 inputs:
   server-url:
@@ -21,8 +22,9 @@ inputs:
     required: true
   api-key:
     description: |
-      Dependency-Track API key. Needs PORTFOLIO_MANAGEMENT on first run, then
-      PROJECT_CREATION_UPLOAD is enough.
+      Dependency-Track API key. Needs PORTFOLIO_MANAGEMENT on the first run (or
+      whenever drift correction is required), then PROJECT_CREATION_UPLOAD is
+      enough for steady-state no-op runs.
     required: true
   domain:
     description: Top-level grouping (Backstage domain).
@@ -42,6 +44,42 @@ inputs:
       bootstrap only domain/system/component.
     required: false
     default: ''
+  classifier:
+    description: |
+      DT project classifier applied to every grouping node. Defaults to PLATFORM,
+      which matches the role of these nodes (umbrellas, not real applications).
+      Valid values: APPLICATION, FRAMEWORK, LIBRARY, CONTAINER, OPERATING_SYSTEM,
+      DEVICE, FIRMWARE, FILE, PLATFORM, DEVICE_DRIVER, MACHINE_LEARNING_MODEL,
+      DATA, CRYPTOGRAPHIC_ASSET.
+    required: false
+    default: PLATFORM
+  domain-collection-logic:
+    description: |
+      Collection logic applied to the domain umbrella. Defaults to
+      AGGREGATE_DIRECT_CHILDREN. Valid values: NONE, AGGREGATE_DIRECT_CHILDREN,
+      AGGREGATE_DIRECT_CHILDREN_WITH_TAG, AGGREGATE_LATEST_VERSION_CHILDREN.
+    required: false
+    default: AGGREGATE_DIRECT_CHILDREN
+  system-collection-logic:
+    description: |
+      Collection logic applied to the system umbrella. Defaults to
+      AGGREGATE_DIRECT_CHILDREN.
+    required: false
+    default: AGGREGATE_DIRECT_CHILDREN
+  component-collection-logic:
+    description: |
+      Collection logic applied to the component umbrella. Defaults to
+      AGGREGATE_LATEST_VERSION_CHILDREN, so the component view rolls up only the
+      latest version of each channel.
+    required: false
+    default: AGGREGATE_LATEST_VERSION_CHILDREN
+  channel-collection-logic:
+    description: |
+      Collection logic applied to the channel umbrella. Defaults to
+      AGGREGATE_LATEST_VERSION_CHILDREN, so the channel view rolls up only the
+      latest per-build SBOM upload.
+    required: false
+    default: AGGREGATE_LATEST_VERSION_CHILDREN
 
 runs:
   using: composite
@@ -55,13 +93,23 @@ runs:
         DT_SYSTEM: ${{ inputs.system }}
         DT_COMPONENT: ${{ inputs.component }}
         DT_CHANNEL: ${{ inputs.channel }}
+        DT_CLASSIFIER: ${{ inputs.classifier }}
+        DT_DOMAIN_COLLECTION_LOGIC: ${{ inputs.domain-collection-logic }}
+        DT_SYSTEM_COLLECTION_LOGIC: ${{ inputs.system-collection-logic }}
+        DT_COMPONENT_COLLECTION_LOGIC: ${{ inputs.component-collection-logic }}
+        DT_CHANNEL_COLLECTION_LOGIC: ${{ inputs.channel-collection-logic }}
       run: |
         $params = @{
-          ServerUrl = $env:DT_SERVER_URL
-          ApiKey    = $env:DT_API_KEY
-          Domain    = $env:DT_DOMAIN
-          System    = $env:DT_SYSTEM
-          Component = $env:DT_COMPONENT
+          ServerUrl                = $env:DT_SERVER_URL
+          ApiKey                   = $env:DT_API_KEY
+          Domain                   = $env:DT_DOMAIN
+          System                   = $env:DT_SYSTEM
+          Component                = $env:DT_COMPONENT
+          Classifier               = $env:DT_CLASSIFIER
+          DomainCollectionLogic    = $env:DT_DOMAIN_COLLECTION_LOGIC
+          SystemCollectionLogic    = $env:DT_SYSTEM_COLLECTION_LOGIC
+          ComponentCollectionLogic = $env:DT_COMPONENT_COLLECTION_LOGIC
+          ChannelCollectionLogic   = $env:DT_CHANNEL_COLLECTION_LOGIC
         }
         if ($env:DT_CHANNEL) {
           $params.Channel = $env:DT_CHANNEL

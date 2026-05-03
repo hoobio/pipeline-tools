@@ -1,0 +1,267 @@
+# Generate a CycloneDX BOM for a .NET solution and upload it to Dependency-Track,
+# linking the upload as a child of <component>@<channel> in the Backstage hierarchy
+# (domain -> system -> component -> channel). Mirrors the GitHub composite action
+# at pipeline/github/job/upload-sbom-to-dependency-track for ADO consumers.
+#
+# Steps emitted by this template:
+#   1. Resolve checkout directories (self + this repo as `pipeline_tools` resource).
+#   2. Install the requested .NET SDK.
+#   3. Generate a CycloneDX BOM.
+#   4. Publish the BOM as a pipeline artifact.
+#   5. Bootstrap the Dependency-Track hierarchy (idempotent).
+#   6. Upload the BOM as a child of <component>@<channel>.
+#   7. Optionally mark the child project as `isLatest`.
+#   8. Optionally prune stale children under <component>@<channel>, keeping N.
+#
+# Steps 5 through 8 are skipped when Build.Reason == 'PullRequest' so PR
+# validation only generates and publishes the BOM artifact.
+#
+# Required ADO setup at the consumer:
+#   - GitHub service connection with read access to hoobio/pipeline-tools.
+#   - A repository resource declaring this repo with alias `pipeline_tools`.
+#   - A variable group (or pipeline variables) supplying `dtServerUrl` and
+#     `dtApiKey` (the latter as a secret).
+#
+# Example consumer (with branch-vs-tag channel routing):
+#
+#   trigger:
+#     batch: true
+#     branches:
+#       include: [refs/heads/main]
+#     tags:
+#       include: ['v*']
+#
+#   resources:
+#     repositories:
+#       - repository: pipeline_tools
+#         type: github
+#         name: hoobio/pipeline-tools
+#         ref: refs/tags/v1.6.0
+#         endpoint: hoobio
+#
+#   variables:
+#     - group: My Dependency Track  # provides DT_HOST, DT_API_KEY
+#     - name: dtChannel
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'release', 'ci/main') ]
+#     - name: dtProjectVersion
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), variables['Build.SourceBranchName'], variables['Build.SourceVersion']) ]
+#     - name: dtMarkLatest
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'true', 'false') ]
+#     - name: dtPrune
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'false', 'true') ]
+#
+#   stages:
+#     - stage: sbom
+#       jobs:
+#         - template: pipeline/ado/templates/job/upload-sbom-to-dependency-track.yaml@pipeline_tools
+#           parameters:
+#             pool:               Default
+#             solutionPath:       $(Build.SourcesDirectory)/$(Build.Repository.Name)/MySolution.sln
+#             dtServerUrl:        https://$(DT_HOST)
+#             dtApiKey:           $(DT_API_KEY)
+#             domain:             my-domain
+#             system:             my-system
+#             component:          my-component
+#             channel:            $(dtChannel)
+#             projectVersion:     $(dtProjectVersion)
+#             markLatest:         $(dtMarkLatest)
+#             pruneStaleChildren: $(dtPrune)
+#             keep:               10
+
+parameters:
+  - name: jobName
+    displayName: ADO job name (must be a valid identifier).
+    type: string
+    default: sbom
+  - name: jobDisplayName
+    displayName: ADO job display name.
+    type: string
+    default: Generate and publish SBOM
+  - name: pool
+    displayName: Agent pool name.
+    type: string
+  - name: dependsOn
+    displayName: Optional list of jobs this depends on.
+    type: object
+    default: []
+  - name: condition
+    displayName: Optional ADO condition expression for the job.
+    type: string
+    default: ''
+  - name: pipelineToolsAlias
+    displayName: |
+      Repository resource alias the consumer used for hoobio/pipeline-tools. Must
+      match the `repository:` field in the consumer's `resources.repositories`.
+    type: string
+    default: pipeline_tools
+  - name: dotnetVersion
+    displayName: .NET SDK version pattern (passed to UseDotNet@2).
+    type: string
+    default: '10.0.x'
+  - name: solutionPath
+    displayName: Path to the .sln, .slnx, or .csproj to scan.
+    type: string
+  - name: bomPath
+    displayName: Destination path for the generated CycloneDX BOM.
+    type: string
+    default: $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+  - name: bomArtifactName
+    displayName: Pipeline artifact name for the published BOM.
+    type: string
+    default: sbom-cyclonedx
+  - name: specVersion
+    displayName: CycloneDX spec version emitted in the BOM.
+    type: string
+    default: '1.6'
+  - name: cyclonedxToolVersion
+    displayName: Pinned dotnet CycloneDX tool version.
+    type: string
+    default: 6.1.1
+  - name: dtServerUrl
+    displayName: Dependency-Track base URL including scheme.
+    type: string
+  - name: dtApiKey
+    displayName: Dependency-Track API key. Mark the source variable as a secret.
+    type: string
+  - name: domain
+    displayName: Top-level Backstage domain.
+    type: string
+  - name: system
+    displayName: Mid-level Backstage system.
+    type: string
+  - name: component
+    displayName: Component name (reused as the project name).
+    type: string
+  - name: channel
+    displayName: 'Channel below the component, e.g. release / prerelease / ci/main.'
+    type: string
+    default: release
+  - name: projectVersion
+    displayName: Child project version (typically the commit SHA).
+    type: string
+    default: $(Build.SourceVersion)
+  - name: projectTags
+    displayName: Comma-separated tags applied to the child project (DT 4.12+).
+    type: string
+    default: branch=$(Build.SourceBranchName),commit=$(Build.SourceVersion)
+  - name: markLatest
+    displayName: |
+      Mark the child project as DT's isLatest after upload. Pass 'true' for canonical
+      release uploads only; CI uploads should leave this 'false'.
+    type: string
+    default: 'false'
+  - name: pruneStaleChildren
+    displayName: |
+      After upload, prune stale children under <component>@<channel>, keeping the
+      most recent `keep`. Requires DT_API_KEY with PORTFOLIO_MANAGEMENT.
+    type: string
+    default: 'false'
+  - name: keep
+    displayName: Number of most recent children to retain when pruning.
+    type: number
+    default: 10
+  - name: skipDtOnPullRequests
+    displayName: Skip the DT bootstrap and upload steps when Build.Reason == PullRequest.
+    type: boolean
+    default: true
+
+jobs:
+  - job: ${{ parameters.jobName }}
+    displayName: ${{ parameters.jobDisplayName }}
+    pool:
+      name: ${{ parameters.pool }}
+    ${{ if ne(length(parameters.dependsOn), 0) }}:
+      dependsOn: ${{ parameters.dependsOn }}
+    ${{ if ne(parameters.condition, '') }}:
+      condition: ${{ parameters.condition }}
+
+    variables:
+      - name: pipelineToolsScriptsDir
+        value: $(Build.SourcesDirectory)/${{ parameters.pipelineToolsAlias }}/scripts
+
+    steps:
+      - checkout: self
+        clean: true
+        fetchDepth: 1
+
+      # Force the resource checkout to land in a folder matching the alias.
+      # ADO's default folder name is the GitHub repo name (with hyphens),
+      # which would mismatch the alias (alphanumeric + underscore only).
+      - checkout: ${{ parameters.pipelineToolsAlias }}
+        path: s/${{ parameters.pipelineToolsAlias }}
+        clean: true
+        fetchDepth: 1
+
+      - task: UseDotNet@2
+        displayName: Use .NET ${{ parameters.dotnetVersion }} SDK
+        inputs:
+          packageType: sdk
+          version: ${{ parameters.dotnetVersion }}
+
+      - template: ../step/sbom/cyclonedx-dotnet.yaml
+        parameters:
+          scriptsDir:   $(pipelineToolsScriptsDir)
+          solutionPath: ${{ parameters.solutionPath }}
+          outputPath:   ${{ parameters.bomPath }}
+          specVersion:  ${{ parameters.specVersion }}
+          toolVersion:  ${{ parameters.cyclonedxToolVersion }}
+
+      # Suffix the artifact with $(System.JobAttempt) so "Re-run failed jobs"
+      # from the ADO UI doesn't collide with the artifact published on the
+      # earlier attempt. First-attempt artifacts get the suffix `-1`.
+      - publish: ${{ parameters.bomPath }}
+        artifact: ${{ parameters.bomArtifactName }}-$(System.JobAttempt)
+        displayName: Publish BOM artifact
+
+      - template: ../step/dt/initialize-hierarchy.yaml
+        parameters:
+          scriptsDir: $(pipelineToolsScriptsDir)
+          serverUrl:  ${{ parameters.dtServerUrl }}
+          apiKey:     ${{ parameters.dtApiKey }}
+          domain:     ${{ parameters.domain }}
+          system:     ${{ parameters.system }}
+          component:  ${{ parameters.component }}
+          channel:    ${{ parameters.channel }}
+          ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+
+      - template: ../step/dt/send-bom.yaml
+        parameters:
+          scriptsDir:     $(pipelineToolsScriptsDir)
+          serverUrl:      ${{ parameters.dtServerUrl }}
+          apiKey:         ${{ parameters.dtApiKey }}
+          projectName:    ${{ parameters.component }}
+          projectVersion: ${{ parameters.projectVersion }}
+          parentName:     ${{ parameters.component }}
+          parentVersion:  ${{ parameters.channel }}
+          bomPath:        ${{ parameters.bomPath }}
+          projectTags:    ${{ parameters.projectTags }}
+          ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+
+      # Mark-latest is gated on the markLatest parameter at runtime so the
+      # consumer can flip it on/off based on Build.SourceBranch (release vs CI).
+      - template: ../step/dt/set-project-latest.yaml
+        parameters:
+          scriptsDir:     $(pipelineToolsScriptsDir)
+          serverUrl:      ${{ parameters.dtServerUrl }}
+          apiKey:         ${{ parameters.dtApiKey }}
+          projectName:    ${{ parameters.component }}
+          projectVersion: ${{ parameters.projectVersion }}
+          ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.markLatest }}', 'true'))
+          ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
+            condition: and(succeeded(), eq('${{ parameters.markLatest }}', 'true'))
+
+      - template: ../step/dt/remove-stale-children.yaml
+        parameters:
+          scriptsDir:    $(pipelineToolsScriptsDir)
+          serverUrl:     ${{ parameters.dtServerUrl }}
+          apiKey:        ${{ parameters.dtApiKey }}
+          parentName:    ${{ parameters.component }}
+          parentVersion: ${{ parameters.channel }}
+          keep:          ${{ parameters.keep }}
+          ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.pruneStaleChildren }}', 'true'))
+          ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
+            condition: and(succeeded(), eq('${{ parameters.pruneStaleChildren }}', 'true'))

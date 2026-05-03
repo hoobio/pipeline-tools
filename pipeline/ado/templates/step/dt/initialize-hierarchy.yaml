@@ -1,0 +1,78 @@
+# Bootstrap a Backstage-style Dependency-Track project hierarchy
+# (domain -> system -> component -> channel) idempotently.
+#
+# Wraps scripts/dependency-track/Initialize-DTHierarchy.ps1. Consumers must check
+# out this repo as a repository resource so the script is on disk. Pass the
+# resulting checkout path as `scriptsDir`.
+#
+# The first run from a new Dependency-Track deployment needs an API key with
+# PORTFOLIO_MANAGEMENT to PUT the umbrella projects. Subsequent runs see the
+# projects already exist and become a no-op, so a lower-privilege key with
+# PROJECT_CREATION_UPLOAD is sufficient afterwards.
+#
+# Example:
+#
+#   - template: pipeline/ado/templates/step/dt/initialize-hierarchy.yaml@pipeline_tools
+#     parameters:
+#       scriptsDir: $(Build.SourcesDirectory)/pipeline_tools/scripts
+#       serverUrl:  $(dtServerUrl)
+#       apiKey:     $(dtApiKey)
+#       domain:     hoobi
+#       system:     automation
+#       component:  hoobi-automation
+#       channel:    release
+
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+  - name: serverUrl
+    displayName: Dependency-Track base URL including scheme (e.g. https://dt.example.com).
+    type: string
+  - name: apiKey
+    displayName: Dependency-Track API key. Mark the source variable as a secret.
+    type: string
+  - name: domain
+    displayName: Top-level Backstage domain.
+    type: string
+  - name: system
+    displayName: Mid-level Backstage system.
+    type: string
+  - name: component
+    displayName: Component name (reused as the project name for the umbrella nodes).
+    type: string
+  - name: channel
+    displayName: 'Channel below the component, e.g. release / prerelease / ci/main.'
+    type: string
+    default: release
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: ''
+  - name: condition
+    displayName: Optional ADO condition expression. Empty means always run on success.
+    type: string
+    default: ''
+
+steps:
+  # Values are passed through env: so secret variables (apiKey) and any
+  # consumer-supplied $(varName) references are expanded by ADO at runtime,
+  # not pasted into the script body where unmapped names trip PowerShell.
+  - pwsh: |
+      & "${{ parameters.scriptsDir }}/dependency-track/Initialize-DTHierarchy.ps1" `
+        -ServerUrl $env:DT_SERVER_URL `
+        -ApiKey    $env:DT_API_KEY `
+        -Domain    $env:DT_DOMAIN `
+        -System    $env:DT_SYSTEM `
+        -Component $env:DT_COMPONENT `
+        -Channel   $env:DT_CHANNEL
+    env:
+      DT_SERVER_URL: ${{ parameters.serverUrl }}
+      DT_API_KEY:    ${{ parameters.apiKey }}
+      DT_DOMAIN:     ${{ parameters.domain }}
+      DT_SYSTEM:     ${{ parameters.system }}
+      DT_COMPONENT:  ${{ parameters.component }}
+      DT_CHANNEL:    ${{ parameters.channel }}
+    displayName: ${{ coalesce(parameters.displayName, format('Bootstrap DT hierarchy ({0}/{1}/{2}/{3})', parameters.domain, parameters.system, parameters.component, parameters.channel)) }}
+    ${{ if ne(parameters.condition, '') }}:
+      condition: ${{ parameters.condition }}

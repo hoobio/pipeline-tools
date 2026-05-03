@@ -2,13 +2,19 @@
 
 Reusable CI/CD pipeline templates and PowerShell scripts. Targets GitHub Actions and Azure DevOps Pipelines, sharing PowerShell logic between the two.
 
-> **This repository is public.** Read [`CLAUDE.md`](CLAUDE.md) before contributing - never commit hostnames, IPs, API keys, personal names, or other identifiable information.
+> **This repository is public.** Read [`AGENTS.md`](AGENTS.md) before contributing - never commit hostnames, IPs, API keys, personal names, or other identifiable information.
 
 ## Layout
 
 ```
 pipeline/
-  ado/templates/{step,stage,job}/   # Azure DevOps templates (placeholder for now)
+  ado/templates/
+    step/
+      sbom/cyclonedx-dotnet.yaml          # Generate a CycloneDX BOM for a .NET project
+      dt/initialize-hierarchy.yaml        # Bootstrap a Backstage hierarchy in DT
+      dt/send-bom.yaml                    # Upload a BOM to DT (returns masked uploadToken)
+    job/
+      upload-sbom-to-dependency-track.yaml  # Orchestrating job template
   github/
     step/                           # Composite actions, one per logical step
       cyclonedx-sbom-dotnet/        # Generate a CycloneDX BOM for a .NET project
@@ -100,6 +106,41 @@ jobs:
 
 If you want fine-grained control over the DT-side steps, compose your own job from the step actions under `pipeline/github/step/`. Each step is documented in its `action.yml`.
 
+## Azure DevOps Pipelines: SBOM upload to Dependency-Track
+
+The job template at `pipeline/ado/templates/job/upload-sbom-to-dependency-track.yaml` mirrors the GitHub composite action. It generates a CycloneDX BOM for a .NET solution, publishes it as a pipeline artifact, bootstraps the Backstage hierarchy (`domain/system/component/channel`) in Dependency-Track, and uploads the BOM as a child of `<component>@<channel>`. PR builds skip the DT bootstrap and upload by default, so the BOM artifact still publishes for inspection.
+
+### .NET example
+
+```yaml
+resources:
+  repositories:
+    - repository: pipeline_tools
+      type: github
+      name: hoobio/pipeline-tools
+      ref: refs/tags/v1.5.0
+      endpoint: hoobio  # ADO GitHub service connection name
+
+variables:
+  - group: My Dependency Track  # provides dtServerUrl and dtApiKey (secret)
+
+stages:
+  - stage: sbom
+    jobs:
+      - template: pipeline/ado/templates/job/upload-sbom-to-dependency-track.yaml@pipeline_tools
+        parameters:
+          pool:           Default
+          solutionPath:   $(Build.SourcesDirectory)/$(Build.Repository.Name)/MySolution.sln
+          dtServerUrl:    $(dtServerUrl)
+          dtApiKey:       $(dtApiKey)
+          domain:         my-domain
+          system:         my-system
+          component:      my-component
+          channel:        release
+```
+
+If you want fine-grained control, the step templates under `pipeline/ado/templates/step/` are usable in isolation. Each declares its inputs explicitly and is documented inline.
+
 ## PowerShell scripts
 
 The composite actions are thin shells over PowerShell scripts in `scripts/`. The scripts are independently usable from Azure DevOps templates, local workstations, or any other PowerShell 7+ context.
@@ -139,7 +180,7 @@ PR titles are validated against Conventional Commits by `.github/workflows/pr-ti
 
 ## Contributing
 
-1. Read [`CLAUDE.md`](CLAUDE.md) carefully.
+1. Read [`AGENTS.md`](AGENTS.md) carefully.
 2. PowerShell only for new scripts; no Bash, no Python.
 3. Conventional Commits, no emoji, no AB# suffix.
 4. Manually review the diff before push - especially for hardcoded URLs, IPs, names.
