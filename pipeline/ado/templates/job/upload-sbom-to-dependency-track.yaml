@@ -147,7 +147,11 @@ jobs:
         clean: true
         fetchDepth: 1
 
+      # Force the resource checkout to land in a folder matching the alias.
+      # ADO's default folder name is the GitHub repo name (with hyphens),
+      # which would mismatch the alias (alphanumeric + underscore only).
       - checkout: ${{ parameters.pipelineToolsAlias }}
+        path: s/${{ parameters.pipelineToolsAlias }}
         clean: true
         fetchDepth: 1
 
