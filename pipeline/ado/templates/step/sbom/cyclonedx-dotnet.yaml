@@ -1,0 +1,56 @@
+# Generate a CycloneDX BOM for a .NET solution or project.
+#
+# Wraps scripts/sbom/New-CycloneDxSbom.ps1. Consumers must check out this repo as
+# a repository resource so the script is on disk. Pass the resulting checkout path
+# as `scriptsDir`.
+#
+# Example:
+#
+#   resources:
+#     repositories:
+#       - repository: pipeline_tools
+#         type: github
+#         name: hoobio/pipeline-tools
+#         ref: refs/tags/v1.5.0
+#         endpoint: hoobio
+#
+#   steps:
+#     - checkout: pipeline_tools
+#     - template: pipeline/ado/templates/step/sbom/cyclonedx-dotnet.yaml@pipeline_tools
+#       parameters:
+#         scriptsDir:   $(Build.SourcesDirectory)/pipeline_tools/scripts
+#         solutionPath: $(Build.SourcesDirectory)/$(Build.Repository.Name)/MySolution.sln
+#         outputPath:   $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+  - name: solutionPath
+    displayName: Path to the .sln, .slnx, or .csproj to scan.
+    type: string
+  - name: outputPath
+    displayName: Destination path for the generated CycloneDX JSON BOM.
+    type: string
+  - name: specVersion
+    displayName: CycloneDX spec version to emit (e.g. 1.5, 1.6).
+    type: string
+    default: '1.6'
+  - name: toolVersion
+    displayName: Pinned dotnet CycloneDX tool version.
+    type: string
+    default: 6.1.1
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: Generate CycloneDX BOM (.NET)
+
+steps:
+  - pwsh: |
+      & "${{ parameters.scriptsDir }}/sbom/New-CycloneDxSbom.ps1" `
+        -SolutionPath "${{ parameters.solutionPath }}" `
+        -OutputPath   "${{ parameters.outputPath }}" `
+        -SpecVersion  "${{ parameters.specVersion }}" `
+        -ToolVersion  "${{ parameters.toolVersion }}" `
+        -Verbose
+    displayName: ${{ parameters.displayName }}

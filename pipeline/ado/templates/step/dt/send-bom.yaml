@@ -1,0 +1,100 @@
+# Upload a CycloneDX BOM to Dependency-Track. Optionally links the upload to a
+# parent project (use the channel umbrella from the hierarchy bootstrap step).
+#
+# Wraps scripts/dependency-track/Send-DTBom.ps1. Returns the DT upload token as a
+# step output variable named `uploadToken` (masked). Set `name` on this template
+# in the consumer to address the output, e.g.:
+#
+#   - template: pipeline/ado/templates/step/dt/send-bom.yaml@pipeline_tools
+#     parameters:
+#       stepName:       upload
+#       scriptsDir:     $(Build.SourcesDirectory)/pipeline_tools/scripts
+#       serverUrl:      $(dtServerUrl)
+#       apiKey:         $(dtApiKey)
+#       projectName:    hoobi-automation
+#       projectVersion: $(Build.SourceVersion)
+#       parentName:     hoobi-automation
+#       parentVersion:  release
+#       bomPath:        $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+#
+#   - script: echo "uploaded with token $(upload.uploadToken)"
+
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+  - name: serverUrl
+    displayName: Dependency-Track base URL including scheme.
+    type: string
+  - name: apiKey
+    displayName: Dependency-Track API key. Mark the source variable as a secret.
+    type: string
+  - name: projectName
+    displayName: Target project name.
+    type: string
+  - name: projectVersion
+    displayName: Target project version (typically the commit SHA).
+    type: string
+  - name: bomPath
+    displayName: Path to the CycloneDX BOM file (JSON or XML).
+    type: string
+  - name: parentName
+    displayName: Optional parent project name for linkage. Empty to skip.
+    type: string
+    default: ''
+  - name: parentVersion
+    displayName: Optional parent project version for linkage. Empty to skip.
+    type: string
+    default: ''
+  - name: projectTags
+    displayName: Comma-separated tags applied to the project (DT 4.12+).
+    type: string
+    default: ''
+  - name: autoCreate
+    displayName: Create the project on DT if it does not yet exist.
+    type: boolean
+    default: true
+  - name: stepName
+    displayName: ADO step name. Required to address the uploadToken output.
+    type: string
+    default: dtUpload
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: Upload BOM to Dependency-Track
+  - name: condition
+    displayName: Optional ADO condition expression. Empty means always run on success.
+    type: string
+    default: ''
+
+steps:
+  - pwsh: |
+      $params = @{
+        ServerUrl      = "${{ parameters.serverUrl }}"
+        ApiKey         = "${{ parameters.apiKey }}"
+        ProjectName    = "${{ parameters.projectName }}"
+        ProjectVersion = "${{ parameters.projectVersion }}"
+        BomPath        = "${{ parameters.bomPath }}"
+      }
+      $parentName = "${{ parameters.parentName }}"
+      $parentVersion = "${{ parameters.parentVersion }}"
+      if ($parentName -and $parentVersion) {
+        $params.ParentName    = $parentName
+        $params.ParentVersion = $parentVersion
+      }
+      $projectTags = "${{ parameters.projectTags }}"
+      if ($projectTags) {
+        $params.ProjectTags = $projectTags
+      }
+      if ('${{ parameters.autoCreate }}' -ieq 'true') {
+        $params.AutoCreate = $true
+      }
+
+      $response = & "${{ parameters.scriptsDir }}/dependency-track/Send-DTBom.ps1" @params
+      if ($response -and $response.token) {
+        Write-Host "##vso[task.setvariable variable=uploadToken;isOutput=true;issecret=true]$($response.token)"
+      }
+    name: ${{ parameters.stepName }}
+    displayName: ${{ parameters.displayName }}
+    ${{ if ne(parameters.condition, '') }}:
+      condition: ${{ parameters.condition }}
