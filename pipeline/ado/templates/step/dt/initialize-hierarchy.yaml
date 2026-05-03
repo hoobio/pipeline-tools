@@ -55,14 +55,24 @@ parameters:
     default: ''
 
 steps:
+  # Values are passed through env: so secret variables (apiKey) and any
+  # consumer-supplied $(varName) references are expanded by ADO at runtime,
+  # not pasted into the script body where unmapped names trip PowerShell.
   - pwsh: |
       & "${{ parameters.scriptsDir }}/dependency-track/Initialize-DTHierarchy.ps1" `
-        -ServerUrl "${{ parameters.serverUrl }}" `
-        -ApiKey    "${{ parameters.apiKey }}" `
-        -Domain    "${{ parameters.domain }}" `
-        -System    "${{ parameters.system }}" `
-        -Component "${{ parameters.component }}" `
-        -Channel   "${{ parameters.channel }}"
+        -ServerUrl $env:DT_SERVER_URL `
+        -ApiKey    $env:DT_API_KEY `
+        -Domain    $env:DT_DOMAIN `
+        -System    $env:DT_SYSTEM `
+        -Component $env:DT_COMPONENT `
+        -Channel   $env:DT_CHANNEL
+    env:
+      DT_SERVER_URL: ${{ parameters.serverUrl }}
+      DT_API_KEY:    ${{ parameters.apiKey }}
+      DT_DOMAIN:     ${{ parameters.domain }}
+      DT_SYSTEM:     ${{ parameters.system }}
+      DT_COMPONENT:  ${{ parameters.component }}
+      DT_CHANNEL:    ${{ parameters.channel }}
     displayName: ${{ coalesce(parameters.displayName, format('Bootstrap DT hierarchy ({0}/{1}/{2}/{3})', parameters.domain, parameters.system, parameters.component, parameters.channel)) }}
     ${{ if ne(parameters.condition, '') }}:
       condition: ${{ parameters.condition }}

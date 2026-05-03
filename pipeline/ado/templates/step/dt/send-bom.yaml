@@ -68,25 +68,25 @@ parameters:
     default: ''
 
 steps:
+  # Values are passed through env: so secret variables (apiKey) and any
+  # consumer-supplied $(varName) references are expanded by ADO at runtime,
+  # not pasted into the script body where unmapped names trip PowerShell.
   - pwsh: |
       $params = @{
-        ServerUrl      = "${{ parameters.serverUrl }}"
-        ApiKey         = "${{ parameters.apiKey }}"
-        ProjectName    = "${{ parameters.projectName }}"
-        ProjectVersion = "${{ parameters.projectVersion }}"
-        BomPath        = "${{ parameters.bomPath }}"
+        ServerUrl      = $env:DT_SERVER_URL
+        ApiKey         = $env:DT_API_KEY
+        ProjectName    = $env:DT_PROJECT_NAME
+        ProjectVersion = $env:DT_PROJECT_VERSION
+        BomPath        = $env:DT_BOM_PATH
       }
-      $parentName = "${{ parameters.parentName }}"
-      $parentVersion = "${{ parameters.parentVersion }}"
-      if ($parentName -and $parentVersion) {
-        $params.ParentName    = $parentName
-        $params.ParentVersion = $parentVersion
+      if ($env:DT_PARENT_NAME -and $env:DT_PARENT_VERSION) {
+        $params.ParentName    = $env:DT_PARENT_NAME
+        $params.ParentVersion = $env:DT_PARENT_VERSION
       }
-      $projectTags = "${{ parameters.projectTags }}"
-      if ($projectTags) {
-        $params.ProjectTags = $projectTags
+      if ($env:DT_PROJECT_TAGS) {
+        $params.ProjectTags = $env:DT_PROJECT_TAGS
       }
-      if ('${{ parameters.autoCreate }}' -ieq 'true') {
+      if ($env:DT_AUTO_CREATE -ieq 'true') {
         $params.AutoCreate = $true
       }
 
@@ -94,6 +94,16 @@ steps:
       if ($response -and $response.token) {
         Write-Host "##vso[task.setvariable variable=uploadToken;isOutput=true;issecret=true]$($response.token)"
       }
+    env:
+      DT_SERVER_URL:      ${{ parameters.serverUrl }}
+      DT_API_KEY:         ${{ parameters.apiKey }}
+      DT_PROJECT_NAME:    ${{ parameters.projectName }}
+      DT_PROJECT_VERSION: ${{ parameters.projectVersion }}
+      DT_BOM_PATH:        ${{ parameters.bomPath }}
+      DT_PARENT_NAME:     ${{ parameters.parentName }}
+      DT_PARENT_VERSION:  ${{ parameters.parentVersion }}
+      DT_PROJECT_TAGS:    ${{ parameters.projectTags }}
+      DT_AUTO_CREATE:     ${{ parameters.autoCreate }}
     name: ${{ parameters.stepName }}
     displayName: ${{ parameters.displayName }}
     ${{ if ne(parameters.condition, '') }}:
