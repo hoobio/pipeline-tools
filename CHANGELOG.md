@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/hoobio/pipeline-tools/compare/v1.5.0...v1.6.0) (2026-05-03)
+
+
+### Features
+
+* **ado:** add SBOM upload templates for Azure DevOps ([#19](https://github.com/hoobio/pipeline-tools/issues/19)) ([282f044](https://github.com/hoobio/pipeline-tools/commit/282f044c651c55044bb6265c7a60b3a3a1715535))
+
 ## [1.5.0](https://github.com/hoobio/pipeline-tools/compare/v1.4.0...v1.5.0) (2026-04-30)
 
 
