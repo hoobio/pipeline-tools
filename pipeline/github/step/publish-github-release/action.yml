@@ -6,6 +6,14 @@ description: |
 
   Idempotent: if the release is already published, this is a no-op.
 
+  Auth: provide either `github-token`, or both `app-id` and `app-private-key`.
+  Prefer the App credentials when downstream workflows need to fire on
+  `release: published` (e.g. an SBOM-upload workflow that distinguishes
+  `release` channel from `ci/<branch>`). GitHub deliberately suppresses
+  follow-up workflow runs for events caused by `GITHUB_TOKEN`, so a publish
+  driven by `github-token` will silently skip `release`-event consumers; an
+  installation token minted from a GitHub App does not have this restriction.
+
 inputs:
   tag:
     description: Release tag identifying the draft to publish.
@@ -18,16 +26,60 @@ inputs:
     description: |
       GitHub token used by `gh`. Pass the calling workflow's `github.token` value via
       this input. Composite action input defaults cannot reference the `github`
-      context, which is why this cannot be defaulted here.
-    required: true
+      context, which is why this cannot be defaulted here. Optional when
+      `app-id` and `app-private-key` are provided.
+    required: false
+    default: ''
+  app-id:
+    description: |
+      GitHub App ID used to mint an installation token for the publish. When
+      set together with `app-private-key`, the publish runs as the App so the
+      resulting `release: published` event triggers follow-up workflows.
+    required: false
+    default: ''
+  app-private-key:
+    description: |
+      GitHub App private key (PEM) paired with `app-id`. Required if `app-id`
+      is supplied.
+    required: false
+    default: ''
 
 runs:
   using: composite
   steps:
+    - name: Validate auth inputs
+      shell: bash
+      env:
+        GH_TOKEN_INPUT: ${{ inputs.github-token }}
+        APP_ID: ${{ inputs.app-id }}
+        APP_KEY: ${{ inputs.app-private-key }}
+      run: |
+        set -euo pipefail
+        if [ -n "$APP_ID" ] && [ -z "$APP_KEY" ]; then
+          echo "::error::publish-github-release: app-id supplied without app-private-key" >&2
+          exit 1
+        fi
+        if [ -z "$APP_ID" ] && [ -n "$APP_KEY" ]; then
+          echo "::error::publish-github-release: app-private-key supplied without app-id" >&2
+          exit 1
+        fi
+        if [ -z "$APP_ID" ] && [ -z "$GH_TOKEN_INPUT" ]; then
+          echo "::error::publish-github-release: provide either github-token, or app-id + app-private-key" >&2
+          exit 1
+        fi
+
+    - id: app-token
+      if: inputs.app-id != ''
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ github.repository_owner }}
+
     - name: Publish draft release
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ inputs.app-id != '' && steps.app-token.outputs.token || inputs.github-token }}
         TAG: ${{ inputs.tag }}
         REPO: ${{ inputs.repository }}
       run: |

@@ -10,9 +10,11 @@
 #   4. Publish the BOM as a pipeline artifact.
 #   5. Bootstrap the Dependency-Track hierarchy (idempotent).
 #   6. Upload the BOM as a child of <component>@<channel>.
+#   7. Optionally mark the child project as `isLatest`.
+#   8. Optionally prune stale children under <component>@<channel>, keeping N.
 #
-# Steps 5 and 6 are skipped when Build.Reason == 'PullRequest' so PR validation
-# only generates and publishes the BOM artifact.
+# Steps 5 through 8 are skipped when Build.Reason == 'PullRequest' so PR
+# validation only generates and publishes the BOM artifact.
 #
 # Required ADO setup at the consumer:
 #   - GitHub service connection with read access to hoobio/pipeline-tools.
@@ -20,32 +22,51 @@
 #   - A variable group (or pipeline variables) supplying `dtServerUrl` and
 #     `dtApiKey` (the latter as a secret).
 #
-# Example consumer:
+# Example consumer (with branch-vs-tag channel routing):
+#
+#   trigger:
+#     batch: true
+#     branches:
+#       include: [refs/heads/main]
+#     tags:
+#       include: ['v*']
 #
 #   resources:
 #     repositories:
 #       - repository: pipeline_tools
 #         type: github
 #         name: hoobio/pipeline-tools
-#         ref: refs/tags/v1.5.0
+#         ref: refs/tags/v1.6.0
 #         endpoint: hoobio
 #
 #   variables:
-#     - group: My Dependency Track  # provides dtServerUrl, dtApiKey
+#     - group: My Dependency Track  # provides DT_HOST, DT_API_KEY
+#     - name: dtChannel
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'release', 'ci/main') ]
+#     - name: dtProjectVersion
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), variables['Build.SourceBranchName'], variables['Build.SourceVersion']) ]
+#     - name: dtMarkLatest
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'true', 'false') ]
+#     - name: dtPrune
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'false', 'true') ]
 #
 #   stages:
 #     - stage: sbom
 #       jobs:
 #         - template: pipeline/ado/templates/job/upload-sbom-to-dependency-track.yaml@pipeline_tools
 #           parameters:
-#             pool:           Default
-#             solutionPath:   $(Build.SourcesDirectory)/$(Build.Repository.Name)/MySolution.sln
-#             dtServerUrl:    $(dtServerUrl)
-#             dtApiKey:       $(dtApiKey)
-#             domain:         my-domain
-#             system:         my-system
-#             component:      my-component
-#             channel:        release
+#             pool:               Default
+#             solutionPath:       $(Build.SourcesDirectory)/$(Build.Repository.Name)/MySolution.sln
+#             dtServerUrl:        https://$(DT_HOST)
+#             dtApiKey:           $(DT_API_KEY)
+#             domain:             my-domain
+#             system:             my-system
+#             component:          my-component
+#             channel:            $(dtChannel)
+#             projectVersion:     $(dtProjectVersion)
+#             markLatest:         $(dtMarkLatest)
+#             pruneStaleChildren: $(dtPrune)
+#             keep:               10
 
 parameters:
   - name: jobName
@@ -123,6 +144,22 @@ parameters:
     displayName: Comma-separated tags applied to the child project (DT 4.12+).
     type: string
     default: branch=$(Build.SourceBranchName),commit=$(Build.SourceVersion)
+  - name: markLatest
+    displayName: |
+      Mark the child project as DT's isLatest after upload. Pass 'true' for canonical
+      release uploads only; CI uploads should leave this 'false'.
+    type: string
+    default: 'false'
+  - name: pruneStaleChildren
+    displayName: |
+      After upload, prune stale children under <component>@<channel>, keeping the
+      most recent `keep`. Requires DT_API_KEY with PORTFOLIO_MANAGEMENT.
+    type: string
+    default: 'false'
+  - name: keep
+    displayName: Number of most recent children to retain when pruning.
+    type: number
+    default: 10
   - name: skipDtOnPullRequests
     displayName: Skip the DT bootstrap and upload steps when Build.Reason == PullRequest.
     type: boolean
@@ -201,3 +238,30 @@ jobs:
           projectTags:    ${{ parameters.projectTags }}
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
             condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+
+      # Mark-latest is gated on the markLatest parameter at runtime so the
+      # consumer can flip it on/off based on Build.SourceBranch (release vs CI).
+      - template: ../step/dt/set-project-latest.yaml
+        parameters:
+          scriptsDir:     $(pipelineToolsScriptsDir)
+          serverUrl:      ${{ parameters.dtServerUrl }}
+          apiKey:         ${{ parameters.dtApiKey }}
+          projectName:    ${{ parameters.component }}
+          projectVersion: ${{ parameters.projectVersion }}
+          ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.markLatest }}', 'true'))
+          ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
+            condition: and(succeeded(), eq('${{ parameters.markLatest }}', 'true'))
+
+      - template: ../step/dt/remove-stale-children.yaml
+        parameters:
+          scriptsDir:    $(pipelineToolsScriptsDir)
+          serverUrl:     ${{ parameters.dtServerUrl }}
+          apiKey:        ${{ parameters.dtApiKey }}
+          parentName:    ${{ parameters.component }}
+          parentVersion: ${{ parameters.channel }}
+          keep:          ${{ parameters.keep }}
+          ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.pruneStaleChildren }}', 'true'))
+          ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
+            condition: and(succeeded(), eq('${{ parameters.pruneStaleChildren }}', 'true'))
