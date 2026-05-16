@@ -1,0 +1,197 @@
+# Generate a CycloneDX BOM for a container image (via Syft) and upload it to
+# Dependency-Track as a child of <component>@<channel> in the Backstage
+# hierarchy (domain -> system -> component -> channel). Step-level composite,
+# so consumers can drop it into an existing job without paying for a second
+# agent acquisition - useful on ephemeral self-hosted runners where stage
+# transitions cost more than the SBOM work itself.
+#
+# Container counterpart to job/upload-sbom-to-dependency-track.yaml (.NET).
+# Emits, in order:
+#   1. Generate the BOM with Syft.
+#   2. Publish the BOM as a pipeline artifact (optional).
+#   3. Bootstrap the DT hierarchy (idempotent; first run needs
+#      PORTFOLIO_MANAGEMENT to create umbrellas, subsequent runs are no-ops).
+#   4. Upload the BOM as a child of <component>@<channel>.
+#   5. Optionally mark the child as isLatest.
+#   6. Optionally prune stale children under <component>@<channel>, keeping N.
+#
+# Consumer setup:
+#   - Check out hoobio/pipeline-tools as a repository resource so the DT
+#     scripts are on disk. Pass the resulting scripts path as `scriptsDir`.
+#   - Provide a Dependency-Track API key (mark the source variable as secret).
+#
+# Example consumer:
+#
+#   resources:
+#     repositories:
+#       - repository: pipeline_tools
+#         type: github
+#         name: hoobio/pipeline-tools
+#         ref: refs/tags/v1.7.0
+#         endpoint: hoobio
+#
+#   variables:
+#     - group: My Dependency Track  # provides DT_HOST, DT_API_KEY
+#     - name: dtChannel
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'release', format('ci/{0}', variables['Build.SourceBranchName'])) ]
+#     - name: dtMarkLatest
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'true', 'false') ]
+#     - name: dtPrune
+#       value: $[ iif(startsWith(variables['Build.SourceBranch'], 'refs/tags/'), 'false', 'true') ]
+#
+#   steps:
+#     - checkout: self
+#     - checkout: pipeline_tools
+#       path: s/pipeline_tools
+#
+#     # ... build/push the image ...
+#
+#     - template: pipeline/ado/templates/step/sbom/upload-container-to-dependency-track.yaml@pipeline_tools
+#       parameters:
+#         scriptsDir:         $(Build.SourcesDirectory)/pipeline_tools/scripts
+#         image:              registry.example.com/myapp:$(Build.SourceVersion)
+#         dtServerUrl:        https://$(DT_HOST)
+#         dtApiKey:           $(DT_API_KEY)
+#         domain:             my-domain
+#         system:             my-system
+#         component:          myapp
+#         channel:            $(dtChannel)
+#         projectVersion:     $(Build.SourceVersion)
+#         markLatest:         $(dtMarkLatest)
+#         pruneStaleChildren: $(dtPrune)
+
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+  - name: image
+    displayName: Full container image reference to scan (e.g. registry/name:tag).
+    type: string
+  - name: bomPath
+    displayName: Destination path for the generated CycloneDX BOM.
+    type: string
+    default: $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+  - name: syftVersion
+    displayName: Pinned anchore/syft image tag.
+    type: string
+    default: v1.17.0
+  - name: publishArtifact
+    displayName: Publish the BOM as a pipeline artifact.
+    type: boolean
+    default: true
+  - name: bomArtifactName
+    displayName: Pipeline artifact name for the published BOM.
+    type: string
+    default: sbom-cyclonedx
+  - name: dtServerUrl
+    displayName: Dependency-Track base URL including scheme.
+    type: string
+  - name: dtApiKey
+    displayName: Dependency-Track API key. Mark the source variable as a secret.
+    type: string
+  - name: domain
+    displayName: Top-level Backstage domain.
+    type: string
+  - name: system
+    displayName: Mid-level Backstage system.
+    type: string
+  - name: component
+    displayName: Component name (reused as the project name).
+    type: string
+  - name: channel
+    displayName: 'Channel below the component, e.g. release / prerelease / ci/main.'
+    type: string
+    default: release
+  - name: projectVersion
+    displayName: Child project version (typically the commit SHA).
+    type: string
+    default: $(Build.SourceVersion)
+  - name: projectTags
+    displayName: Comma-separated tags applied to the child project (DT 4.12+).
+    type: string
+    default: branch=$(Build.SourceBranchName),commit=$(Build.SourceVersion)
+  - name: markLatest
+    displayName: |
+      Mark the child project as DT's isLatest after upload. Pass 'true' for canonical
+      release uploads only; CI uploads should leave this 'false'.
+    type: string
+    default: 'false'
+  - name: pruneStaleChildren
+    displayName: |
+      After upload, prune stale children under <component>@<channel>, keeping the
+      most recent `keep`. Requires DT_API_KEY with PORTFOLIO_MANAGEMENT.
+    type: string
+    default: 'false'
+  - name: keep
+    displayName: Number of most recent children to retain when pruning.
+    type: number
+    default: 10
+  - name: skipDtOnPullRequests
+    displayName: Skip the DT bootstrap and upload steps when Build.Reason == PullRequest.
+    type: boolean
+    default: true
+
+steps:
+  - template: cyclonedx-container.yaml
+    parameters:
+      image:       ${{ parameters.image }}
+      outputPath:  ${{ parameters.bomPath }}
+      syftVersion: ${{ parameters.syftVersion }}
+
+  - ${{ if eq(parameters.publishArtifact, true) }}:
+      # Suffix with $(System.JobAttempt) so "Re-run failed jobs" from the ADO UI
+      # doesn't collide with the artifact published on the earlier attempt.
+      - publish: ${{ parameters.bomPath }}
+        artifact: ${{ parameters.bomArtifactName }}-$(System.JobAttempt)
+        displayName: Publish BOM artifact
+
+  - template: ../dt/initialize-hierarchy.yaml
+    parameters:
+      scriptsDir: ${{ parameters.scriptsDir }}
+      serverUrl:  ${{ parameters.dtServerUrl }}
+      apiKey:     ${{ parameters.dtApiKey }}
+      domain:     ${{ parameters.domain }}
+      system:     ${{ parameters.system }}
+      component:  ${{ parameters.component }}
+      channel:    ${{ parameters.channel }}
+      ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+        condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+
+  - template: ../dt/send-bom.yaml
+    parameters:
+      scriptsDir:     ${{ parameters.scriptsDir }}
+      serverUrl:      ${{ parameters.dtServerUrl }}
+      apiKey:         ${{ parameters.dtApiKey }}
+      projectName:    ${{ parameters.component }}
+      projectVersion: ${{ parameters.projectVersion }}
+      parentName:     ${{ parameters.component }}
+      parentVersion:  ${{ parameters.channel }}
+      bomPath:        ${{ parameters.bomPath }}
+      projectTags:    ${{ parameters.projectTags }}
+      ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+        condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+
+  - template: ../dt/set-project-latest.yaml
+    parameters:
+      scriptsDir:     ${{ parameters.scriptsDir }}
+      serverUrl:      ${{ parameters.dtServerUrl }}
+      apiKey:         ${{ parameters.dtApiKey }}
+      projectName:    ${{ parameters.component }}
+      projectVersion: ${{ parameters.projectVersion }}
+      ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+        condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.markLatest }}', 'true'))
+      ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
+        condition: and(succeeded(), eq('${{ parameters.markLatest }}', 'true'))
+
+  - template: ../dt/remove-stale-children.yaml
+    parameters:
+      scriptsDir:    ${{ parameters.scriptsDir }}
+      serverUrl:     ${{ parameters.dtServerUrl }}
+      apiKey:        ${{ parameters.dtApiKey }}
+      parentName:    ${{ parameters.component }}
+      parentVersion: ${{ parameters.channel }}
+      keep:          ${{ parameters.keep }}
+      ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+        condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.pruneStaleChildren }}', 'true'))
+      ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
+        condition: and(succeeded(), eq('${{ parameters.pruneStaleChildren }}', 'true'))

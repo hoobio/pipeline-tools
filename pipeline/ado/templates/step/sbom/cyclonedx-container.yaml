@@ -1,0 +1,79 @@
+# Generate a CycloneDX BOM for a container image using Syft.
+#
+# Includes both OS-level packages (deb/apk/rpm) and language-level packages
+# (pip/npm/nuget/etc.) discovered inside the image filesystem - strictly more
+# comprehensive than a source-only BOM for containerised workloads.
+#
+# Runs Syft in a pinned container. The host agent only needs Docker. The
+# Docker socket is mounted so Syft can scan images present in the local
+# daemon; Syft falls back to pulling from the registry when the image is
+# not yet local.
+#
+# Pure generator: no Dependency-Track integration. Pair with the four
+# DT step templates under step/dt/ (or use the composite step
+# step/sbom/upload-container-to-dependency-track.yaml) to upload.
+#
+# Example:
+#
+#   resources:
+#     repositories:
+#       - repository: pipeline_tools
+#         type: github
+#         name: hoobio/pipeline-tools
+#         ref: refs/tags/v1.7.0
+#         endpoint: hoobio
+#
+#   steps:
+#     - template: pipeline/ado/templates/step/sbom/cyclonedx-container.yaml@pipeline_tools
+#       parameters:
+#         image:      registry.example.com/myapp:$(Build.SourceVersion)
+#         outputPath: $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+
+parameters:
+  - name: image
+    displayName: Full image reference to scan (e.g. registry/name:tag).
+    type: string
+  - name: outputPath
+    displayName: Destination path for the generated CycloneDX JSON BOM.
+    type: string
+    default: $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+  - name: syftVersion
+    displayName: Pinned anchore/syft image tag.
+    type: string
+    default: v1.17.0
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: Generate CycloneDX BOM (container)
+
+steps:
+  - bash: |
+      set -euo pipefail
+
+      IMAGE="$DT_IMAGE"
+      OUTPUT="$DT_OUTPUT"
+      SYFT_VERSION="$DT_SYFT_VERSION"
+
+      if [ -z "$IMAGE" ]; then
+        echo "##vso[task.logissue type=error]image parameter is required"
+        exit 1
+      fi
+
+      OUTPUT_DIR=$(dirname "$OUTPUT")
+      OUTPUT_FILE=$(basename "$OUTPUT")
+      mkdir -p "$OUTPUT_DIR"
+
+      docker run --rm \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "$OUTPUT_DIR:/out" \
+        -w /out \
+        "anchore/syft:${SYFT_VERSION}" \
+        "$IMAGE" \
+        -o "cyclonedx-json=$OUTPUT_FILE"
+
+      ls -l "$OUTPUT"
+    env:
+      DT_IMAGE:        ${{ parameters.image }}
+      DT_OUTPUT:       ${{ parameters.outputPath }}
+      DT_SYFT_VERSION: ${{ parameters.syftVersion }}
+    displayName: ${{ parameters.displayName }}
