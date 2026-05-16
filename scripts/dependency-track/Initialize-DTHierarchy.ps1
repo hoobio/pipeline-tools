@@ -73,14 +73,22 @@ Collection logic applied to the system umbrella. Defaults to AGGREGATE_DIRECT_CH
 
 .PARAMETER ComponentCollectionLogic
 Collection logic applied to the component umbrella. Defaults to
-AGGREGATE_LATEST_VERSION_CHILDREN, so the component view rolls up only the latest
-version of each channel.
+AGGREGATE_DIRECT_CHILDREN, summing across every channel under the component.
+AGGREGATE_LATEST_VERSION_CHILDREN would be ideal in theory (pick the canonical
+channel), but DT's isLatest flag is keyed by project name, and our umbrellas share
+the project name with their per-build children. Marking a channel umbrella as
+isLatest would clash with marking individual builds isLatest at the channel level,
+so the latest-version logic collapses to zero at the component view. Summing direct
+children avoids that, at the cost of overcounting when the same SHA exists in
+multiple channels (rare; bounded).
 
 .PARAMETER ChannelCollectionLogic
 Collection logic applied to the channel umbrella. Defaults to
-AGGREGATE_LATEST_VERSION_CHILDREN. When SubChannel is in use, the channel umbrella's
-direct children are SubChannel nodes (one per branch), so AGGREGATE_DIRECT_CHILDREN
-may better suit a "see every branch" view; leave the default unless you have a reason.
+AGGREGATE_LATEST_VERSION_CHILDREN, so the channel view rolls up only the latest
+per-build SBOM upload (the one marked isLatest=true at upload time). When SubChannel
+is in use, the channel umbrella's direct children are SubChannel nodes (one per
+branch), so AGGREGATE_DIRECT_CHILDREN may better suit a "see every branch" view;
+leave the default unless you have a reason.
 
 .PARAMETER SubChannelCollectionLogic
 Collection logic applied to the sub-channel umbrella. Defaults to
@@ -111,7 +119,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]
-    [string]$ComponentCollectionLogic = 'AGGREGATE_LATEST_VERSION_CHILDREN',
+    [string]$ComponentCollectionLogic = 'AGGREGATE_DIRECT_CHILDREN',
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]

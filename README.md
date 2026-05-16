@@ -89,6 +89,18 @@ flowchart TB
 
 The `ci` channel exists only as a parent for sub-channels; SBOMs are never uploaded directly to `<Component>@ci`. Trunk-based repos typically use `release` + `<default-branch>` + `ci/<branch>`; gitflow repos add `prerelease` + `hotfix/<hotfix-id>`.
 
+**Collection-logic note.** Each umbrella has a DT `collectionLogic` that controls how vulnerability metrics from below roll up. The defaults the bootstrap script applies:
+
+| Umbrella | Collection logic | Why |
+|---|---|---|
+| `<Domain>@domain` | `AGGREGATE_DIRECT_CHILDREN` | Sum every system that lives under the domain. |
+| `<System>@system` | `AGGREGATE_DIRECT_CHILDREN` | Sum every component that lives under the system. |
+| `<Component>@component` | `AGGREGATE_DIRECT_CHILDREN` | Sum every channel under the component. `AGGREGATE_LATEST_VERSION_CHILDREN` would be ideal here (pick the canonical channel) but DT's `isLatest` flag is keyed by project name, and umbrellas share the project name with per-build children, so the latest-version logic collapses to zero at the component view. Summing direct children is the workable alternative; the only downside is overcounting when the same SHA exists in multiple channels at the same time, which is rare. |
+| `<Component>@<channel>` | `AGGREGATE_LATEST_VERSION_CHILDREN` | Per-channel view should reflect "the current production build", which is the child SHA marked `isLatest=true` at upload time. |
+| `<Component>@<sub-channel>` | `AGGREGATE_LATEST_VERSION_CHILDREN` | Same reasoning, scoped to a single branch under `ci`. |
+
+Override any of these via the `*-collection-logic` parameters on the bootstrap step / GitHub action if you need different semantics; the script is idempotent and will PATCH existing umbrellas back into shape on the next run.
+
 ### Build flow
 
 `Build-CycloneDxSbom.ps1` orchestrates one or both scanners and merges their output.

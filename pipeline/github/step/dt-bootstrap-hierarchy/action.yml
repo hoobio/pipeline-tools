@@ -86,10 +86,15 @@ inputs:
   component-collection-logic:
     description: |
       Collection logic applied to the component umbrella. Defaults to
-      AGGREGATE_LATEST_VERSION_CHILDREN, so the component view rolls up only the
-      latest version of each channel.
+      AGGREGATE_DIRECT_CHILDREN, summing across every channel under the
+      component. AGGREGATE_LATEST_VERSION_CHILDREN would be ideal in theory
+      (pick the canonical channel), but DT's isLatest flag is keyed by project
+      name and our umbrellas share the project name with their per-build
+      children, so the latest-version logic collapses to zero at the component
+      view. Summing direct children avoids that, at the cost of overcounting
+      when the same SHA exists in multiple channels (rare; bounded).
     required: false
-    default: AGGREGATE_LATEST_VERSION_CHILDREN
+    default: AGGREGATE_DIRECT_CHILDREN
   channel-collection-logic:
     description: |
       Collection logic applied to the channel umbrella. Defaults to
