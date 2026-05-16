@@ -2,13 +2,16 @@
 
 <#
 .SYNOPSIS
-Generates a CycloneDX SBOM for a .NET solution or project using the dotnet CycloneDX tool.
+Backward-compat wrapper: generate a CycloneDX BOM for a .NET solution or project.
 
 .DESCRIPTION
-Installs (or updates) the global CycloneDX tool to the requested version, runs it against the
-target solution/project, and writes the resulting JSON BOM to OutputPath. The emitted spec
-version is pinned via -SpecVersion so consumers can guarantee compatibility with their SBOM
-tooling.
+Soft-deprecated in v2. Delegates to Build-CycloneDxSbom.ps1 with -AppLanguage dotnet
+so existing v1 callers keep working without modification. New scripts should call
+Build-CycloneDxSbom.ps1 directly because it supports container scans, other
+language ecosystems, and merging multiple BOMs.
+
+This wrapper will be removed in a future major release. The set of parameters here
+is exactly the v1 surface so v1 -> v2 upgrades that only pin the tag don't fail.
 
 .PARAMETER SolutionPath
 Path to the .sln, .slnx, or .csproj to scan.
@@ -43,49 +46,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path -LiteralPath $SolutionPath)) {
-    throw "SolutionPath '$SolutionPath' not found"
-}
+Write-Warning "New-CycloneDxSbom.ps1 is soft-deprecated; prefer Build-CycloneDxSbom.ps1 -AppLanguage dotnet. This wrapper will be removed in a future major release."
 
-Write-Verbose "Installing CycloneDX dotnet tool $ToolVersion"
-& dotnet tool update --global CycloneDX --version $ToolVersion 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    & dotnet tool install --global CycloneDX --version $ToolVersion
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install dotnet CycloneDX $ToolVersion (exit $LASTEXITCODE)"
-    }
-}
+$builder = Join-Path -Path $PSScriptRoot -ChildPath 'Build-CycloneDxSbom.ps1'
 
-$workDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ([guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $workDir -Force | Out-Null
-$workFileName = [System.IO.Path]::GetFileName($OutputPath)
-
-try {
-    Write-Verbose "Running dotnet CycloneDX against $SolutionPath (spec $SpecVersion)"
-    & dotnet CycloneDX $SolutionPath `
-        --spec-version $SpecVersion `
-        --json `
-        --output $workDir `
-        --filename $workFileName
-    if ($LASTEXITCODE -ne 0) {
-        throw "dotnet CycloneDX failed (exit $LASTEXITCODE)"
-    }
-
-    $generated = Join-Path -Path $workDir -ChildPath $workFileName
-    if (-not (Test-Path -LiteralPath $generated)) {
-        throw "CycloneDX did not produce expected output at '$generated'"
-    }
-
-    $outDir = Split-Path -Path $OutputPath -Parent
-    if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
-        New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-    }
-
-    Move-Item -Path $generated -Destination $OutputPath -Force
-    Write-Information "BOM written to $OutputPath" -InformationAction Continue
-}
-finally {
-    if (Test-Path -LiteralPath $workDir) {
-        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
+& $builder `
+    -AppLanguage dotnet `
+    -AppManifestPath $SolutionPath `
+    -OutputPath $OutputPath `
+    -DotnetSpecVersion $SpecVersion `
+    -DotnetToolVersion $ToolVersion

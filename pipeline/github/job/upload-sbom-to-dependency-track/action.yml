@@ -1,102 +1,149 @@
 name: Upload SBOM to Dependency-Track
 description: |
-  Uploads an already-generated CycloneDX BOM to Dependency-Track and orchestrates the
-  follow-up DT operations: workflow-artifact publication, hierarchy/parent bootstrap,
-  child upload with parent linkage, optional `isLatest` flag, and optional pruning of
-  stale children.
+  Generate a CycloneDX BOM (container, application, or both merged) and upload it
+  to Dependency-Track as a child of `<component>@<channel>` (or
+  `<component>@<sub-channel>` when sub-channel is set) in the Backstage hierarchy
+  (domain -> system -> component -> channel [-> sub-channel]).
 
-  Generation is intentionally NOT part of this action. The right tool to produce a
-  CycloneDX BOM differs by language (`dotnet CycloneDX` for .NET, `cyclonedx-bom` for
-  Python, `@cyclonedx/cyclonedx-npm` for Node, syft for containers, etc.). Pair this
-  action with whichever generator is appropriate for your project, e.g. the .NET
-  helper at `pipeline/github/step/cyclonedx-sbom-dotnet`.
+  Domain/system/component/channel are REQUIRED. The legacy flat / single-parent
+  mode supported in v1 was removed in v2: upgrade consumers must adopt
+  domain/system/component/channel before bumping the tag.
 
-  Two parent-linkage modes are supported. Pick one:
+  Two ways to provide the BOM:
 
-    A. Backstage hierarchy (preferred). Set `domain`, `system`, `component`, and
-       `channel`. The action bootstraps the four-level hierarchy
-       (domain -> system -> component -> channel) and uploads the BOM as a child of
-       `<component>@<channel>`. Project name defaults to `<component>`.
-    B. Legacy single parent. Set `parent-name` and `parent-version` directly. The
-       action bootstraps that one parent via BOM-upload (lower DT permissions).
+    A. Pass `bom-path` to a pre-generated CycloneDX BOM. The action uploads it
+       as-is. Use this when you already have a generator step in your workflow
+       or need a tool this action doesn't wrap.
+
+    B. Set `image` and/or `app-language` and the action runs
+       scripts/sbom/Build-CycloneDxSbom.ps1 to generate the BOM. When both are
+       set, Syft (container) and the language scanner are run and merged via
+       cyclonedx-cli, so the resulting BOM has OS + filesystem coverage AND
+       lockfile-accurate license / direct-vs-transitive metadata.
 
   Steps run by this action:
-    1. Optionally publish the BOM as a workflow artifact for inspection.
-    2. Ensure parent infra exists in Dependency-Track (full hierarchy in mode A,
-       single parent in mode B).
-    3. Upload the BOM to the child project, linked to the channel/parent.
-    4. Optionally mark the child project as `isLatest = true`.
-    5. Optionally prune stale children under the channel/parent, keeping only N.
+    1. Generate the BOM (skipped when `bom-path` is supplied).
+    2. Optionally publish the BOM as a workflow artifact.
+    3. Bootstrap the DT hierarchy (idempotent; first run needs
+       PORTFOLIO_MANAGEMENT, subsequent runs are no-ops).
+    4. Upload the BOM as a child of the deepest umbrella.
+    5. Optionally poll DT until processing completes.
+    6. Optionally mark the child as isLatest.
+    7. Optionally prune stale children under the upload parent.
 
 inputs:
+  # ----- BOM source -----
   bom-path:
-    description: Path to a pre-generated CycloneDX BOM file (JSON or XML).
-    required: true
+    description: |
+      Path to a pre-generated CycloneDX BOM. When set, generation inputs are
+      ignored. When empty, the action generates a BOM from `image` / `app-language`.
+    required: false
+    default: ''
+
+  # ----- BOM generation (used when bom-path is empty) -----
+  image:
+    description: |
+      Container image to scan with Syft. Empty to skip the container scan.
+      At least one of `image` or `app-language` must be set when bom-path is empty.
+    required: false
+    default: ''
+  syft-version:
+    description: Pinned anchore/syft image tag.
+    required: false
+    default: v1.17.0
+  app-language:
+    description: 'Application scanner. One of: none, python, node, dotnet.'
+    required: false
+    default: none
+  app-manifest-path:
+    description: |
+      Path the application scanner reads. Directory for python/node, .sln / .slnx /
+      .csproj for dotnet. Ignored when app-language is none.
+    required: false
+    default: ''
+  python-image:
+    description: Docker image used to run cyclonedx-py.
+    required: false
+    default: 'python:3.12-slim'
+  cyclonedx-py-version:
+    description: Pinned cyclonedx-bom (cyclonedx-py) version.
+    required: false
+    default: '5.3.0'
+  node-image:
+    description: Docker image used to run cyclonedx-npm.
+    required: false
+    default: 'node:20-alpine'
+  cyclonedx-npm-version:
+    description: Pinned '@cyclonedx/cyclonedx-npm' version.
+    required: false
+    default: '4.2.1'
+  dotnet-spec-version:
+    description: CycloneDX spec version emitted by the .NET tool.
+    required: false
+    default: '1.6'
+  dotnet-tool-version:
+    description: Pinned dotnet CycloneDX tool version.
+    required: false
+    default: '6.1.1'
+  cyclonedx-cli-image:
+    description: Docker image used to run cyclonedx-cli merge.
+    required: false
+    default: 'cyclonedx/cyclonedx-cli:0.27.2'
+  generated-bom-path:
+    description: |
+      Output path used when this action generates the BOM (bom-path empty).
+      Ignored when bom-path is set.
+    required: false
+    default: sbom.cdx.json
+
+  # ----- Artifact upload -----
   upload-artifact:
     description: Publish the BOM as a workflow artifact.
     required: false
     default: 'true'
   artifact-name:
-    description: Workflow artifact name (only used when upload-artifact is 'true').
+    description: Workflow artifact name (used when upload-artifact is 'true').
     required: false
     default: sbom-cyclonedx
 
+  # ----- DT -----
   server-url:
-    description: Dependency-Track server URL including scheme (e.g. https://dt.example.com).
+    description: Dependency-Track server URL including scheme.
     required: true
   api-key:
     description: Dependency-Track API key.
     required: true
 
-  project-name:
+  domain:
+    description: Top-level Backstage domain.
+    required: true
+  system:
+    description: Mid-level Backstage system.
+    required: true
+  component:
     description: |
-      Child project name. Defaults to `component` when running in hierarchy mode and
-      this input is empty.
+      Component name. Reused as the project name for the upload and as the name on
+      every umbrella node in the hierarchy.
+    required: true
+  channel:
+    description: |
+      Channel below the component, e.g. "release", "prerelease", "<default-branch>",
+      "ci", or "hotfix".
+    required: true
+  sub-channel:
+    description: |
+      Optional fifth-level bucket below the channel (e.g. branch name when
+      channel="ci"). When set, the BOM is uploaded as a child of
+      `<component>@<sub-channel>`. When empty, the BOM is uploaded as a child of
+      `<component>@<channel>`.
     required: false
     default: ''
+
   project-version:
     description: Child project version.
     required: true
   project-tags:
-    description: Comma-separated tags applied to the child project. (DT 4.12+).
-    required: false
-    default: ''
-
-  domain:
-    description: |
-      Hierarchy mode: top-level Backstage domain. When set with `system`, `component`,
-      and `channel`, the action bootstraps the full domain/system/component/channel
-      hierarchy and links the upload as a child of `<component>@<channel>`.
-    required: false
-    default: ''
-  system:
-    description: |
-      Hierarchy mode: mid-level Backstage system. See `domain`.
-    required: false
-    default: ''
-  component:
-    description: |
-      Hierarchy mode: component name. Reused as the child project name (and as the
-      project name for the component/channel umbrella nodes) so all per-build SBOM
-      uploads share one DT project name. See `domain`.
-    required: false
-    default: ''
-  channel:
-    description: |
-      Hierarchy mode: channel below the component, e.g. `release`, `prerelease`,
-      `ci/main`. Becomes the parent version for the upload. See `domain`.
-    required: false
-    default: ''
-
-  parent-name:
-    description: |
-      Legacy single-parent mode: parent project name. Empty to skip parent linkage.
-      Mutually exclusive with `domain`/`system`/`component`/`channel`.
-    required: false
-    default: ''
-  parent-version:
-    description: |
-      Legacy single-parent mode: parent project version.
+    description: Comma-separated tags applied to the child project (DT 4.12+).
     required: false
     default: ''
 
@@ -106,7 +153,9 @@ inputs:
     default: 'false'
 
   prune-stale-children:
-    description: After upload, prune stale children under the parent (requires parent inputs).
+    description: |
+      After upload, prune stale children under the upload parent, keeping the most
+      recent `keep`.
     required: false
     default: 'false'
   keep:
@@ -128,119 +177,104 @@ inputs:
     default: '5'
 
 outputs:
+  bom-path:
+    description: |
+      Resolved path to the BOM (either the user-supplied `bom-path` or the
+      generated path when the action generated it).
+    value: ${{ steps.resolve-bom.outputs.path }}
   upload-token:
     description: |
-      DT upload token returned by the BOM upload (masked in logs). Use this if
-      `wait-for-processing` is left at the default (`false`) and you want to poll
-      for processing status from a later job/step.
+      DT upload token returned by the BOM upload (masked in logs). Use this when
+      `wait-for-processing` is left at the default ('false') and you want to poll
+      from a later job/step.
     value: ${{ steps.upload.outputs.upload-token }}
 
 runs:
   using: composite
   steps:
+    - name: Generate CycloneDX BOM
+      if: inputs.bom-path == ''
+      uses: hoobio/pipeline-tools/pipeline/github/step/build-cyclonedx-sbom@main
+      with:
+        image:                 ${{ inputs.image }}
+        syft-version:          ${{ inputs.syft-version }}
+        app-language:          ${{ inputs.app-language }}
+        app-manifest-path:     ${{ inputs.app-manifest-path }}
+        python-image:          ${{ inputs.python-image }}
+        cyclonedx-py-version:  ${{ inputs.cyclonedx-py-version }}
+        node-image:            ${{ inputs.node-image }}
+        cyclonedx-npm-version: ${{ inputs.cyclonedx-npm-version }}
+        dotnet-spec-version:   ${{ inputs.dotnet-spec-version }}
+        dotnet-tool-version:   ${{ inputs.dotnet-tool-version }}
+        cyclonedx-cli-image:   ${{ inputs.cyclonedx-cli-image }}
+        output-path:           ${{ inputs.generated-bom-path }}
+
+    - id: resolve-bom
+      name: Resolve effective BOM path
+      shell: pwsh
+      env:
+        BOM_PATH:           ${{ inputs.bom-path }}
+        GENERATED_BOM_PATH: ${{ inputs.generated-bom-path }}
+      run: |
+        $resolved = if ([string]::IsNullOrEmpty($env:BOM_PATH)) { $env:GENERATED_BOM_PATH } else { $env:BOM_PATH }
+        if (-not (Test-Path -LiteralPath $resolved)) {
+          throw "Resolved BOM path '$resolved' does not exist."
+        }
+        "path=$resolved" >> $env:GITHUB_OUTPUT
+
+    - name: Resolve DT upload parent
+      id: parent
+      shell: pwsh
+      env:
+        DT_CHANNEL:    ${{ inputs.channel }}
+        DT_SUBCHANNEL: ${{ inputs.sub-channel }}
+        DT_COMPONENT:  ${{ inputs.component }}
+      run: |
+        $parent = if ([string]::IsNullOrEmpty($env:DT_SUBCHANNEL)) { $env:DT_CHANNEL } else { $env:DT_SUBCHANNEL }
+        Write-Host "DT upload parent: $($env:DT_COMPONENT)@$parent"
+        "version=$parent" >> $env:GITHUB_OUTPUT
+
     - name: Upload BOM as workflow artifact
       if: inputs.upload-artifact == 'true'
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact-name }}
-        path: ${{ inputs.bom-path }}
+        path: ${{ steps.resolve-bom.outputs.path }}
         if-no-files-found: error
 
-    - name: Resolve linkage mode
-      shell: pwsh
-      env:
-        IN_DOMAIN: ${{ inputs.domain }}
-        IN_SYSTEM: ${{ inputs.system }}
-        IN_COMPONENT: ${{ inputs.component }}
-        IN_CHANNEL: ${{ inputs.channel }}
-        IN_PARENT_NAME: ${{ inputs.parent-name }}
-        IN_PARENT_VERSION: ${{ inputs.parent-version }}
-        IN_PROJECT_NAME: ${{ inputs.project-name }}
-      run: |
-        $hierarchyParts = @($env:IN_DOMAIN, $env:IN_SYSTEM, $env:IN_COMPONENT, $env:IN_CHANNEL)
-        $hierarchySet = ($hierarchyParts | Where-Object { $_ }).Count
-        $legacySet = if ($env:IN_PARENT_NAME -and $env:IN_PARENT_VERSION) { 1 } else { 0 }
-
-        if ($hierarchySet -gt 0 -and $hierarchySet -lt 4) {
-          throw 'Hierarchy mode requires all of domain, system, component, channel to be set.'
-        }
-        if ($hierarchySet -eq 4 -and ($env:IN_PARENT_NAME -or $env:IN_PARENT_VERSION)) {
-          throw 'Hierarchy mode (domain/system/component/channel) and legacy parent-name/parent-version are mutually exclusive.'
-        }
-
-        if ($hierarchySet -eq 4) {
-          "DT_LINKAGE_MODE=hierarchy"                  | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          "DT_EFFECTIVE_PARENT_NAME=$env:IN_COMPONENT" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          "DT_EFFECTIVE_PARENT_VERSION=$env:IN_CHANNEL"| Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          $effectiveProjectName = if ($env:IN_PROJECT_NAME) { $env:IN_PROJECT_NAME } else { $env:IN_COMPONENT }
-          "DT_EFFECTIVE_PROJECT_NAME=$effectiveProjectName" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-        }
-        elseif ($legacySet -eq 1) {
-          if (-not $env:IN_PROJECT_NAME) {
-            throw 'project-name is required in legacy parent mode.'
-          }
-          "DT_LINKAGE_MODE=legacy"                          | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          "DT_EFFECTIVE_PARENT_NAME=$env:IN_PARENT_NAME"    | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          "DT_EFFECTIVE_PARENT_VERSION=$env:IN_PARENT_VERSION" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          "DT_EFFECTIVE_PROJECT_NAME=$env:IN_PROJECT_NAME"  | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-        }
-        else {
-          if (-not $env:IN_PROJECT_NAME) {
-            throw 'project-name is required when no parent linkage is configured.'
-          }
-          "DT_LINKAGE_MODE=none"                            | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          "DT_EFFECTIVE_PARENT_NAME="                       | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          "DT_EFFECTIVE_PARENT_VERSION="                    | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-          "DT_EFFECTIVE_PROJECT_NAME=$env:IN_PROJECT_NAME"  | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
-        }
-
     - name: Bootstrap Dependency-Track hierarchy
-      if: env.DT_LINKAGE_MODE == 'hierarchy'
       uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@main
       with:
-        server-url: ${{ inputs.server-url }}
-        api-key: ${{ inputs.api-key }}
-        domain: ${{ inputs.domain }}
-        system: ${{ inputs.system }}
-        component: ${{ inputs.component }}
-        channel: ${{ inputs.channel }}
-
-    - name: Ensure Dependency-Track parent project exists (legacy mode)
-      if: env.DT_LINKAGE_MODE == 'legacy'
-      shell: pwsh
-      env:
-        DT_SERVER_URL: ${{ inputs.server-url }}
-        DT_API_KEY: ${{ inputs.api-key }}
-        DT_BOM_PATH: ${{ inputs.bom-path }}
-      run: |
-        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Initialize-DTParentProject.ps1" `
-          -ServerUrl $env:DT_SERVER_URL `
-          -ApiKey $env:DT_API_KEY `
-          -ProjectName $env:DT_EFFECTIVE_PARENT_NAME `
-          -ProjectVersion $env:DT_EFFECTIVE_PARENT_VERSION `
-          -BomPath $env:DT_BOM_PATH
+        server-url:  ${{ inputs.server-url }}
+        api-key:     ${{ inputs.api-key }}
+        domain:      ${{ inputs.domain }}
+        system:      ${{ inputs.system }}
+        component:   ${{ inputs.component }}
+        channel:     ${{ inputs.channel }}
+        sub-channel: ${{ inputs.sub-channel }}
 
     - id: upload
       name: Upload BOM to Dependency-Track
       shell: pwsh
       env:
-        DT_SERVER_URL: ${{ inputs.server-url }}
-        DT_API_KEY: ${{ inputs.api-key }}
+        DT_SERVER_URL:      ${{ inputs.server-url }}
+        DT_API_KEY:         ${{ inputs.api-key }}
+        DT_PROJECT_NAME:    ${{ inputs.component }}
         DT_PROJECT_VERSION: ${{ inputs.project-version }}
-        DT_BOM_PATH: ${{ inputs.bom-path }}
-        DT_PROJECT_TAGS: ${{ inputs.project-tags }}
+        DT_PARENT_NAME:     ${{ inputs.component }}
+        DT_PARENT_VERSION:  ${{ steps.parent.outputs.version }}
+        DT_BOM_PATH:        ${{ steps.resolve-bom.outputs.path }}
+        DT_PROJECT_TAGS:    ${{ inputs.project-tags }}
       run: |
         $params = @{
           ServerUrl      = $env:DT_SERVER_URL
           ApiKey         = $env:DT_API_KEY
-          ProjectName    = $env:DT_EFFECTIVE_PROJECT_NAME
+          ProjectName    = $env:DT_PROJECT_NAME
           ProjectVersion = $env:DT_PROJECT_VERSION
+          ParentName     = $env:DT_PARENT_NAME
+          ParentVersion  = $env:DT_PARENT_VERSION
           BomPath        = $env:DT_BOM_PATH
           AutoCreate     = $true
-        }
-        if ($env:DT_EFFECTIVE_PARENT_NAME -and $env:DT_EFFECTIVE_PARENT_VERSION) {
-          $params.ParentName    = $env:DT_EFFECTIVE_PARENT_NAME
-          $params.ParentVersion = $env:DT_EFFECTIVE_PARENT_VERSION
         }
         if ($env:DT_PROJECT_TAGS) {
           $params.ProjectTags = $env:DT_PROJECT_TAGS
@@ -255,10 +289,10 @@ runs:
       if: inputs.wait-for-processing == 'true' && steps.upload.outputs.upload-token != ''
       shell: pwsh
       env:
-        DT_SERVER_URL: ${{ inputs.server-url }}
-        DT_API_KEY: ${{ inputs.api-key }}
-        DT_TOKEN: ${{ steps.upload.outputs.upload-token }}
-        DT_TIMEOUT: ${{ inputs.processing-timeout-seconds }}
+        DT_SERVER_URL:    ${{ inputs.server-url }}
+        DT_API_KEY:       ${{ inputs.api-key }}
+        DT_TOKEN:         ${{ steps.upload.outputs.upload-token }}
+        DT_TIMEOUT:       ${{ inputs.processing-timeout-seconds }}
         DT_POLL_INTERVAL: ${{ inputs.processing-poll-interval-seconds }}
       run: |
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Wait-DTBomProcessing.ps1" `
@@ -272,27 +306,30 @@ runs:
       if: inputs.mark-latest == 'true'
       shell: pwsh
       env:
-        DT_SERVER_URL: ${{ inputs.server-url }}
-        DT_API_KEY: ${{ inputs.api-key }}
+        DT_SERVER_URL:      ${{ inputs.server-url }}
+        DT_API_KEY:         ${{ inputs.api-key }}
+        DT_PROJECT_NAME:    ${{ inputs.component }}
         DT_PROJECT_VERSION: ${{ inputs.project-version }}
       run: |
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Set-DTProjectLatest.ps1" `
           -ServerUrl $env:DT_SERVER_URL `
           -ApiKey $env:DT_API_KEY `
-          -ProjectName $env:DT_EFFECTIVE_PROJECT_NAME `
+          -ProjectName $env:DT_PROJECT_NAME `
           -ProjectVersion $env:DT_PROJECT_VERSION
 
     - name: Prune stale child projects under parent
-      if: inputs.prune-stale-children == 'true' && env.DT_LINKAGE_MODE != 'none'
+      if: inputs.prune-stale-children == 'true'
       shell: pwsh
       env:
-        DT_SERVER_URL: ${{ inputs.server-url }}
-        DT_API_KEY: ${{ inputs.api-key }}
-        DT_KEEP: ${{ inputs.keep }}
+        DT_SERVER_URL:     ${{ inputs.server-url }}
+        DT_API_KEY:        ${{ inputs.api-key }}
+        DT_PARENT_NAME:    ${{ inputs.component }}
+        DT_PARENT_VERSION: ${{ steps.parent.outputs.version }}
+        DT_KEEP:           ${{ inputs.keep }}
       run: |
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Remove-DTStaleChildren.ps1" `
           -ServerUrl $env:DT_SERVER_URL `
           -ApiKey $env:DT_API_KEY `
-          -ParentName $env:DT_EFFECTIVE_PARENT_NAME `
-          -ParentVersion $env:DT_EFFECTIVE_PARENT_VERSION `
+          -ParentName $env:DT_PARENT_NAME `
+          -ParentVersion $env:DT_PARENT_VERSION `
           -Keep ([int]$env:DT_KEEP)

@@ -1,14 +1,24 @@
 name: Bootstrap Dependency-Track hierarchy
 description: |
   Idempotently creates the Backstage-style Dependency-Track project hierarchy
-  (domain -> system -> component -> channel) above per-build SBOM uploads.
+  (domain -> system -> component -> channel [-> sub-channel]) above per-build
+  SBOM uploads.
 
   Layout produced (default classifier PLATFORM):
 
       <domain>          @ "domain"        (root)
       <system>          @ "system"        (parent: <domain>@domain)
       <component>       @ "component"     (parent: <system>@system)
-      <component>       @ <channel>       (parent: <component>@component)   [optional]
+      <component>       @ <channel>       (parent: <component>@component)
+      <component>       @ <sub-channel>   (parent: <component>@<channel>)   [optional]
+
+  Sub-channel is used to group CI builds from non-default branches under a
+  shared "ci" channel - typical layouts:
+
+      release builds   : domain/system/component@component/component@release
+      default branch   : domain/system/component@component/component@<default-branch>
+      feature branches : domain/system/component@component/component@ci/component@<branch>
+      hotfix (gitflow) : domain/system/component@component/component@hotfix/component@<hotfix-id>
 
   Each grouping node is created with the desired classifier and collection-logic;
   if the node already exists with different values, the script PATCHes it back into
@@ -39,9 +49,16 @@ inputs:
     required: true
   channel:
     description: |
-      Optional channel below the component (e.g. "release", "prerelease", "ci/main").
-      Created as `<component>@<channel>` linked to the component umbrella. Omit to
-      bootstrap only domain/system/component.
+      Channel below the component, e.g. "release", "prerelease", "<default-branch>",
+      "ci", or "hotfix". Created as `<component>@<channel>` linked to the component
+      umbrella.
+    required: true
+  sub-channel:
+    description: |
+      Optional fifth-level bucket below the channel. Typical use: channel="ci" with
+      sub-channel="<branch-name>" so non-default-branch CI builds group under a
+      shared "ci" umbrella but each branch keeps its own SBOM history. Pass empty
+      to skip.
     required: false
     default: ''
   classifier:
@@ -80,6 +97,12 @@ inputs:
       latest per-build SBOM upload.
     required: false
     default: AGGREGATE_LATEST_VERSION_CHILDREN
+  sub-channel-collection-logic:
+    description: |
+      Collection logic applied to the sub-channel umbrella. Defaults to
+      AGGREGATE_LATEST_VERSION_CHILDREN.
+    required: false
+    default: AGGREGATE_LATEST_VERSION_CHILDREN
 
 runs:
   using: composite
@@ -93,25 +116,29 @@ runs:
         DT_SYSTEM: ${{ inputs.system }}
         DT_COMPONENT: ${{ inputs.component }}
         DT_CHANNEL: ${{ inputs.channel }}
+        DT_SUBCHANNEL: ${{ inputs.sub-channel }}
         DT_CLASSIFIER: ${{ inputs.classifier }}
         DT_DOMAIN_COLLECTION_LOGIC: ${{ inputs.domain-collection-logic }}
         DT_SYSTEM_COLLECTION_LOGIC: ${{ inputs.system-collection-logic }}
         DT_COMPONENT_COLLECTION_LOGIC: ${{ inputs.component-collection-logic }}
         DT_CHANNEL_COLLECTION_LOGIC: ${{ inputs.channel-collection-logic }}
+        DT_SUBCHANNEL_COLLECTION_LOGIC: ${{ inputs.sub-channel-collection-logic }}
       run: |
         $params = @{
-          ServerUrl                = $env:DT_SERVER_URL
-          ApiKey                   = $env:DT_API_KEY
-          Domain                   = $env:DT_DOMAIN
-          System                   = $env:DT_SYSTEM
-          Component                = $env:DT_COMPONENT
-          Classifier               = $env:DT_CLASSIFIER
-          DomainCollectionLogic    = $env:DT_DOMAIN_COLLECTION_LOGIC
-          SystemCollectionLogic    = $env:DT_SYSTEM_COLLECTION_LOGIC
-          ComponentCollectionLogic = $env:DT_COMPONENT_COLLECTION_LOGIC
-          ChannelCollectionLogic   = $env:DT_CHANNEL_COLLECTION_LOGIC
+          ServerUrl                 = $env:DT_SERVER_URL
+          ApiKey                    = $env:DT_API_KEY
+          Domain                    = $env:DT_DOMAIN
+          System                    = $env:DT_SYSTEM
+          Component                 = $env:DT_COMPONENT
+          Channel                   = $env:DT_CHANNEL
+          Classifier                = $env:DT_CLASSIFIER
+          DomainCollectionLogic     = $env:DT_DOMAIN_COLLECTION_LOGIC
+          SystemCollectionLogic     = $env:DT_SYSTEM_COLLECTION_LOGIC
+          ComponentCollectionLogic  = $env:DT_COMPONENT_COLLECTION_LOGIC
+          ChannelCollectionLogic    = $env:DT_CHANNEL_COLLECTION_LOGIC
+          SubChannelCollectionLogic = $env:DT_SUBCHANNEL_COLLECTION_LOGIC
         }
-        if ($env:DT_CHANNEL) {
-          $params.Channel = $env:DT_CHANNEL
+        if ($env:DT_SUBCHANNEL) {
+          $params.SubChannel = $env:DT_SUBCHANNEL
         }
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Initialize-DTHierarchy.ps1" @params

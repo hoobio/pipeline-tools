@@ -3,18 +3,26 @@
 <#
 .SYNOPSIS
 Bootstraps a Backstage-style Dependency-Track project hierarchy
-(domain -> system -> component -> channel) idempotently.
+(domain -> system -> component -> channel [-> subChannel]) idempotently.
 
 .DESCRIPTION
-Creates the four grouping projects that sit above per-build SBOM uploads, in order, each
+Creates the grouping projects that sit above per-build SBOM uploads, in order, each
 linked to the one above it. Layout:
 
     <Domain>          @ "domain"        (root)
     <System>          @ "system"        (parent: <Domain>@domain)
     <Component>       @ "component"     (parent: <System>@system)
     <Component>       @ <Channel>       (parent: <Component>@component)
+    <Component>       @ <SubChannel>    (parent: <Component>@<Channel>)   [optional]
 
-Where <Channel> is a free-form bucket such as "release", "prerelease", or "ci/main".
+Where <Channel> is a free-form bucket and <SubChannel> is an optional fifth level
+used to group CI builds from non-default branches under a shared "ci" channel.
+Typical layouts:
+
+    release builds   : domain/system/component@component/component@release
+    default branch   : domain/system/component@component/component@<default-branch>
+    feature branches : domain/system/component@component/component@ci/component@<branch>
+    hotfix (gitflow) : domain/system/component@component/component@hotfix/component@<hotfix-id>
 
 The DT project create endpoint (PUT /api/v1/project) is used because BOM-upload bootstrap
 would attach the supplied BOM to the grouping project, which is misleading for an empty
@@ -43,8 +51,15 @@ Component name. Reused as the project name for the component umbrella and the ch
 umbrella so they sort together in the DT portfolio view.
 
 .PARAMETER Channel
-Optional fourth-level bucket below the component (e.g. "release", "prerelease",
-"ci/main"). Skipped when omitted.
+Fourth-level bucket below the component, e.g. "release", "prerelease", "<default-branch>",
+"hotfix", or "ci".
+
+.PARAMETER SubChannel
+Optional fifth-level bucket below the channel. Use when the channel groups multiple
+buckets that each need their own SBOM history (most commonly: channel="ci" and
+SubChannel="<branch-name>"). The composite step that consumes this bootstrap will then
+upload the per-build BOM as a child of <Component>@<SubChannel> instead of
+<Component>@<Channel>.
 
 .PARAMETER Classifier
 DT project classifier applied to every grouping node. Defaults to PLATFORM, which
@@ -63,8 +78,14 @@ version of each channel.
 
 .PARAMETER ChannelCollectionLogic
 Collection logic applied to the channel umbrella. Defaults to
-AGGREGATE_LATEST_VERSION_CHILDREN, so the channel view rolls up only the latest
-per-build SBOM upload (which is what most consumers expect).
+AGGREGATE_LATEST_VERSION_CHILDREN. When SubChannel is in use, the channel umbrella's
+direct children are SubChannel nodes (one per branch), so AGGREGATE_DIRECT_CHILDREN
+may better suit a "see every branch" view; leave the default unless you have a reason.
+
+.PARAMETER SubChannelCollectionLogic
+Collection logic applied to the sub-channel umbrella. Defaults to
+AGGREGATE_LATEST_VERSION_CHILDREN, so the per-branch view rolls up only the latest
+per-build SBOM upload.
 #>
 [CmdletBinding()]
 param(
@@ -73,7 +94,8 @@ param(
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$Domain,
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$System,
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$Component,
-    [Parameter(Mandatory = $false)] [string]$Channel,
+    [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$Channel,
+    [Parameter(Mandatory = $false)] [string]$SubChannel,
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('APPLICATION','FRAMEWORK','LIBRARY','CONTAINER','OPERATING_SYSTEM','DEVICE','FIRMWARE','FILE','PLATFORM','DEVICE_DRIVER','MACHINE_LEARNING_MODEL','DATA','CRYPTOGRAPHIC_ASSET')]
@@ -93,7 +115,11 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]
-    [string]$ChannelCollectionLogic = 'AGGREGATE_LATEST_VERSION_CHILDREN'
+    [string]$ChannelCollectionLogic = 'AGGREGATE_LATEST_VERSION_CHILDREN',
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]
+    [string]$SubChannelCollectionLogic = 'AGGREGATE_LATEST_VERSION_CHILDREN'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -260,9 +286,14 @@ $componentUuid = Sync-DTGroupingProject `
     -Name $Component -Version 'component' -ParentUuid $systemUuid `
     -DesiredClassifier $Classifier -DesiredCollectionLogic $ComponentCollectionLogic
 
-if ($Channel) {
+$channelUuid = Sync-DTGroupingProject `
+    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+    -Name $Component -Version $Channel -ParentUuid $componentUuid `
+    -DesiredClassifier $Classifier -DesiredCollectionLogic $ChannelCollectionLogic
+
+if ($SubChannel) {
     $null = Sync-DTGroupingProject `
         -ServerUrl $ServerUrl -ApiKey $ApiKey `
-        -Name $Component -Version $Channel -ParentUuid $componentUuid `
-        -DesiredClassifier $Classifier -DesiredCollectionLogic $ChannelCollectionLogic
+        -Name $Component -Version $SubChannel -ParentUuid $channelUuid `
+        -DesiredClassifier $Classifier -DesiredCollectionLogic $SubChannelCollectionLogic
 }

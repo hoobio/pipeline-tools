@@ -1,5 +1,5 @@
 # Bootstrap a Backstage-style Dependency-Track project hierarchy
-# (domain -> system -> component -> channel) idempotently.
+# (domain -> system -> component -> channel [-> subChannel]) idempotently.
 #
 # Wraps scripts/dependency-track/Initialize-DTHierarchy.ps1. Consumers must check
 # out this repo as a repository resource so the script is on disk. Pass the
@@ -17,10 +17,11 @@
 #       scriptsDir: $(Build.SourcesDirectory)/pipeline_tools/scripts
 #       serverUrl:  $(dtServerUrl)
 #       apiKey:     $(dtApiKey)
-#       domain:     hoobi
-#       system:     automation
-#       component:  hoobi-automation
+#       domain:     my-domain
+#       system:     my-system
+#       component:  my-component
 #       channel:    release
+#       # subChannel: feat/my-feature   # optional, when channel="ci"
 
 parameters:
   - name: scriptsDir
@@ -42,9 +43,15 @@ parameters:
     displayName: Component name (reused as the project name for the umbrella nodes).
     type: string
   - name: channel
-    displayName: 'Channel below the component, e.g. release / prerelease / ci/main.'
+    displayName: 'Channel below the component, e.g. release / prerelease / <default-branch> / ci / hotfix.'
     type: string
-    default: release
+  - name: subChannel
+    displayName: |
+      Optional fifth-level bucket below the channel. Typical use: channel="ci" with
+      subChannel="<branch-name>" so non-default-branch CI builds group under a shared
+      "ci" umbrella but each branch keeps its own SBOM history. Pass empty to skip.
+    type: string
+    default: ''
   - name: displayName
     displayName: Pipeline UI label for the generated step.
     type: string
@@ -59,13 +66,18 @@ steps:
   # consumer-supplied $(varName) references are expanded by ADO at runtime,
   # not pasted into the script body where unmapped names trip PowerShell.
   - pwsh: |
-      & "${{ parameters.scriptsDir }}/dependency-track/Initialize-DTHierarchy.ps1" `
-        -ServerUrl $env:DT_SERVER_URL `
-        -ApiKey    $env:DT_API_KEY `
-        -Domain    $env:DT_DOMAIN `
-        -System    $env:DT_SYSTEM `
-        -Component $env:DT_COMPONENT `
-        -Channel   $env:DT_CHANNEL
+      $params = @{
+        ServerUrl = $env:DT_SERVER_URL
+        ApiKey    = $env:DT_API_KEY
+        Domain    = $env:DT_DOMAIN
+        System    = $env:DT_SYSTEM
+        Component = $env:DT_COMPONENT
+        Channel   = $env:DT_CHANNEL
+      }
+      if ($env:DT_SUBCHANNEL) {
+        $params.SubChannel = $env:DT_SUBCHANNEL
+      }
+      & "${{ parameters.scriptsDir }}/dependency-track/Initialize-DTHierarchy.ps1" @params
     env:
       DT_SERVER_URL: ${{ parameters.serverUrl }}
       DT_API_KEY:    ${{ parameters.apiKey }}
@@ -73,6 +85,7 @@ steps:
       DT_SYSTEM:     ${{ parameters.system }}
       DT_COMPONENT:  ${{ parameters.component }}
       DT_CHANNEL:    ${{ parameters.channel }}
+      DT_SUBCHANNEL: ${{ parameters.subChannel }}
     displayName: ${{ coalesce(parameters.displayName, format('Bootstrap DT hierarchy ({0}/{1}/{2}/{3})', parameters.domain, parameters.system, parameters.component, parameters.channel)) }}
     ${{ if ne(parameters.condition, '') }}:
       condition: ${{ parameters.condition }}

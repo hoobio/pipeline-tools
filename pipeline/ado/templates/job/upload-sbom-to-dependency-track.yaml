@@ -133,9 +133,15 @@ parameters:
     displayName: Component name (reused as the project name).
     type: string
   - name: channel
-    displayName: 'Channel below the component, e.g. release / prerelease / ci/main.'
+    displayName: 'Channel below the component, e.g. release / prerelease / <default-branch> / ci / hotfix.'
     type: string
-    default: release
+  - name: subChannel
+    displayName: |
+      Optional fifth-level bucket below the channel (e.g. branch name when channel="ci").
+      When set, the BOM is uploaded as a child of <component>@<subChannel>. Pass empty to
+      upload as a child of <component>@<channel>.
+    type: string
+    default: ''
   - name: projectVersion
     displayName: Child project version (typically the commit SHA).
     type: string
@@ -213,6 +219,22 @@ jobs:
         artifact: ${{ parameters.bomArtifactName }}-$(System.JobAttempt)
         displayName: Publish BOM artifact
 
+      # Resolve the BOM's parent umbrella at runtime: subChannel if non-empty, else channel.
+      - bash: |
+          set -eu
+          SUBCH="$DT_SUBCHANNEL"
+          CH="$DT_CHANNEL"
+          PARENT_VERSION="${SUBCH:-$CH}"
+          echo "DT upload parent: ${DT_COMPONENT}@${PARENT_VERSION}"
+          echo "##vso[task.setvariable variable=__dtComposite_BomParentVersion]$PARENT_VERSION"
+        env:
+          DT_CHANNEL:    ${{ parameters.channel }}
+          DT_SUBCHANNEL: ${{ parameters.subChannel }}
+          DT_COMPONENT:  ${{ parameters.component }}
+        displayName: 'Resolve DT upload parent'
+        ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
+          condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+
       - template: ../step/dt/initialize-hierarchy.yaml
         parameters:
           scriptsDir: $(pipelineToolsScriptsDir)
@@ -222,6 +244,7 @@ jobs:
           system:     ${{ parameters.system }}
           component:  ${{ parameters.component }}
           channel:    ${{ parameters.channel }}
+          subChannel: ${{ parameters.subChannel }}
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
             condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
 
@@ -233,7 +256,7 @@ jobs:
           projectName:    ${{ parameters.component }}
           projectVersion: ${{ parameters.projectVersion }}
           parentName:     ${{ parameters.component }}
-          parentVersion:  ${{ parameters.channel }}
+          parentVersion:  $(__dtComposite_BomParentVersion)
           bomPath:        ${{ parameters.bomPath }}
           projectTags:    ${{ parameters.projectTags }}
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
@@ -259,7 +282,7 @@ jobs:
           serverUrl:     ${{ parameters.dtServerUrl }}
           apiKey:        ${{ parameters.dtApiKey }}
           parentName:    ${{ parameters.component }}
-          parentVersion: ${{ parameters.channel }}
+          parentVersion: $(__dtComposite_BomParentVersion)
           keep:          ${{ parameters.keep }}
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
             condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.pruneStaleChildren }}', 'true'))

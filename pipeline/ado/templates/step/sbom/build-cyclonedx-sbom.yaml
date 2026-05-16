@@ -1,0 +1,147 @@
+# Generate a CycloneDX BOM for a container image, an application lockfile,
+# or both (merged). Thin wrapper over scripts/sbom/Build-CycloneDxSbom.ps1
+# which is the single source of truth for SBOM generation in this repo.
+#
+# Consumers must check out this repository as a repository resource so the
+# script is on disk. Pass the resulting checkout path as `scriptsDir`.
+#
+# Modes:
+#
+#   image only           Syft scans the container. OS + filesystem packages
+#                        only; license/direct-transitive metadata for
+#                        application packages may be incomplete.
+#
+#   appLanguage only     Language-native scanner reads the lockfile. Accurate
+#                        license and direct-vs-transitive metadata, but no OS
+#                        coverage.
+#
+#   both                 Both run. cyclonedx-cli merges them in this order:
+#                        container BOM first, application BOM second. When DT
+#                        ingests the merged file and dedupes by purl, the
+#                        application BOM's metadata wins for any shared
+#                        component, so you get OS coverage from Syft plus
+#                        lockfile-accurate metadata from the language tool.
+#
+# Example (container + Python merge):
+#
+#   - template: pipeline/ado/templates/step/sbom/build-cyclonedx-sbom.yaml@pipeline_tools
+#     parameters:
+#       scriptsDir:      $(Build.SourcesDirectory)/pipeline_tools/scripts
+#       image:           registry.example.com/myapp:$(Build.SourceVersion)
+#       appLanguage:     python
+#       appManifestPath: $(Build.SourcesDirectory)/$(Build.Repository.Name)
+#       outputPath:      $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+
+  - name: image
+    displayName: |
+      Container image reference to scan with Syft. Empty to skip the container scan.
+      At least one of image or appLanguage must be set.
+    type: string
+    default: ''
+  - name: syftVersion
+    displayName: Pinned anchore/syft image tag.
+    type: string
+    default: v1.17.0
+
+  - name: appLanguage
+    displayName: |
+      Application-level scanner. One of: none, python, node, dotnet. Default 'none'.
+      When non-none, appManifestPath is required.
+    type: string
+    values:
+      - none
+      - python
+      - node
+      - dotnet
+    default: none
+  - name: appManifestPath
+    displayName: |
+      Path the application scanner reads from. Directory for python/node, .sln/.slnx/.csproj
+      for dotnet. Ignored when appLanguage is 'none'.
+    type: string
+    default: ''
+
+  - name: pythonImage
+    displayName: Docker image used to run cyclonedx-py.
+    type: string
+    default: 'python:3.12-slim'
+  - name: cycloneDxPyVersion
+    displayName: Pinned cyclonedx-bom (cyclonedx-py) version.
+    type: string
+    default: '5.3.0'
+
+  - name: nodeImage
+    displayName: Docker image used to run cyclonedx-npm.
+    type: string
+    default: 'node:20-alpine'
+  - name: cycloneDxNpmVersion
+    displayName: Pinned @cyclonedx/cyclonedx-npm version.
+    type: string
+    default: '4.2.1'
+
+  - name: dotnetSpecVersion
+    displayName: CycloneDX spec version emitted by the .NET tool.
+    type: string
+    default: '1.6'
+  - name: dotnetToolVersion
+    displayName: Pinned dotnet CycloneDX tool version.
+    type: string
+    default: '6.1.1'
+
+  - name: cycloneDxCliImage
+    displayName: Docker image used to run cyclonedx-cli merge.
+    type: string
+    default: 'cyclonedx/cyclonedx-cli:0.27.2'
+
+  - name: outputPath
+    displayName: Destination path for the generated CycloneDX JSON BOM.
+    type: string
+
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: 'Generate CycloneDX BOM'
+  - name: condition
+    displayName: Optional ADO condition expression. Empty means always run on success.
+    type: string
+    default: ''
+
+steps:
+  - pwsh: |
+      $params = @{
+        OutputPath           = $env:BOM_OUTPUT_PATH
+        SyftVersion          = $env:BOM_SYFT_VERSION
+        AppLanguage          = $env:BOM_APP_LANGUAGE
+        PythonImage          = $env:BOM_PYTHON_IMAGE
+        CycloneDxPyVersion   = $env:BOM_CYCLONEDX_PY_VERSION
+        NodeImage            = $env:BOM_NODE_IMAGE
+        CycloneDxNpmVersion  = $env:BOM_CYCLONEDX_NPM_VERSION
+        DotnetSpecVersion    = $env:BOM_DOTNET_SPEC_VERSION
+        DotnetToolVersion    = $env:BOM_DOTNET_TOOL_VERSION
+        CycloneDxCliImage    = $env:BOM_CYCLONEDX_CLI_IMAGE
+      }
+      if ($env:BOM_IMAGE)             { $params.Image = $env:BOM_IMAGE }
+      if ($env:BOM_APP_MANIFEST_PATH) { $params.AppManifestPath = $env:BOM_APP_MANIFEST_PATH }
+
+      & "${{ parameters.scriptsDir }}/sbom/Build-CycloneDxSbom.ps1" @params
+    env:
+      BOM_IMAGE:                 ${{ parameters.image }}
+      BOM_SYFT_VERSION:          ${{ parameters.syftVersion }}
+      BOM_APP_LANGUAGE:          ${{ parameters.appLanguage }}
+      BOM_APP_MANIFEST_PATH:     ${{ parameters.appManifestPath }}
+      BOM_PYTHON_IMAGE:          ${{ parameters.pythonImage }}
+      BOM_CYCLONEDX_PY_VERSION:  ${{ parameters.cycloneDxPyVersion }}
+      BOM_NODE_IMAGE:            ${{ parameters.nodeImage }}
+      BOM_CYCLONEDX_NPM_VERSION: ${{ parameters.cycloneDxNpmVersion }}
+      BOM_DOTNET_SPEC_VERSION:   ${{ parameters.dotnetSpecVersion }}
+      BOM_DOTNET_TOOL_VERSION:   ${{ parameters.dotnetToolVersion }}
+      BOM_CYCLONEDX_CLI_IMAGE:   ${{ parameters.cycloneDxCliImage }}
+      BOM_OUTPUT_PATH:           ${{ parameters.outputPath }}
+    displayName: ${{ parameters.displayName }}
+    ${{ if ne(parameters.condition, '') }}:
+      condition: ${{ parameters.condition }}
