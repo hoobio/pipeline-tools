@@ -259,6 +259,11 @@ steps:
 
   - template: ../dt/send-bom.yaml
     parameters:
+      # stepName must be unique within the surrounding job. When this composite
+      # runs more than once in a single job (e.g. one upload per container),
+      # the default `dtUpload` collides, so we derive a per-component name and
+      # sanitise hyphens to underscores to keep it a valid identifier.
+      stepName:       dtUpload_${{ replace(parameters.component, '-', '_') }}
       scriptsDir:     ${{ parameters.scriptsDir }}
       serverUrl:      ${{ parameters.dtServerUrl }}
       apiKey:         ${{ parameters.dtApiKey }}
