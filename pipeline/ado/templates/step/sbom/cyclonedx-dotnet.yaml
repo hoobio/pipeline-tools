@@ -1,8 +1,8 @@
-# Generate a CycloneDX BOM for a .NET solution or project.
-#
-# Wraps scripts/sbom/New-CycloneDxSbom.ps1. Consumers must check out this repo as
-# a repository resource so the script is on disk. Pass the resulting checkout path
-# as `scriptsDir`.
+# Generate a CycloneDX BOM for a .NET solution or project. Backward-compat
+# wrapper kept for v1 consumers: delegates to the generic
+# step/sbom/build-cyclonedx-sbom.yaml with appLanguage=dotnet. New consumers
+# should use build-cyclonedx-sbom.yaml directly so they can opt into the
+# container/application merge flow.
 #
 # Example:
 #
@@ -11,7 +11,7 @@
 #       - repository: pipeline_tools
 #         type: github
 #         name: hoobio/pipeline-tools
-#         ref: refs/tags/v1.5.0
+#         ref: refs/tags/v2.0.0
 #         endpoint: hoobio
 #
 #   steps:
@@ -46,11 +46,12 @@ parameters:
     default: Generate CycloneDX BOM (.NET)
 
 steps:
-  - pwsh: |
-      & "${{ parameters.scriptsDir }}/sbom/New-CycloneDxSbom.ps1" `
-        -SolutionPath "${{ parameters.solutionPath }}" `
-        -OutputPath   "${{ parameters.outputPath }}" `
-        -SpecVersion  "${{ parameters.specVersion }}" `
-        -ToolVersion  "${{ parameters.toolVersion }}" `
-        -Verbose
-    displayName: ${{ parameters.displayName }}
+  - template: build-cyclonedx-sbom.yaml
+    parameters:
+      scriptsDir:        ${{ parameters.scriptsDir }}
+      appLanguage:       dotnet
+      appManifestPath:   ${{ parameters.solutionPath }}
+      dotnetSpecVersion: ${{ parameters.specVersion }}
+      dotnetToolVersion: ${{ parameters.toolVersion }}
+      outputPath:        ${{ parameters.outputPath }}
+      displayName:       ${{ parameters.displayName }}
