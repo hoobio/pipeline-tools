@@ -102,13 +102,17 @@ parameters:
     displayName: Path to the .sln, .slnx, or .csproj to scan.
     type: string
   - name: bomPath
-    displayName: Destination path for the generated CycloneDX BOM.
+    displayName: |
+      Destination path for the generated CycloneDX BOM. Default uses the
+      component name so multiple invocations in the same job don't collide.
     type: string
-    default: $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+    default: ''
   - name: bomArtifactName
-    displayName: Pipeline artifact name for the published BOM.
+    displayName: |
+      Pipeline artifact name for the published BOM. Default uses the component
+      name so multiple invocations in the same job don't collide.
     type: string
-    default: sbom-cyclonedx
+    default: ''
   - name: specVersion
     displayName: CycloneDX spec version emitted in the BOM.
     type: string
@@ -140,6 +144,19 @@ parameters:
       Optional fifth-level bucket below the channel (e.g. branch name when channel="ci").
       When set, the BOM is uploaded as a child of <component>@<subChannel>. Pass empty to
       upload as a child of <component>@<channel>.
+
+      With channel="ci" + a subChannel, the bootstrap also auto-migrates any legacy
+      v1 `<component>@ci/<subChannel>` umbrella into the new structure (re-parents
+      children, deletes the empty legacy). Always-on, idempotent.
+    type: string
+    default: ''
+  - name: defaultBranch
+    displayName: |
+      Name of the repo's default branch (e.g. 'main', 'master'). Used by the legacy
+      v1 -> v2 sweep so a `<component>@ci/<defaultBranch>` project gets promoted to
+      top-level `<component>@<defaultBranch>` (sibling of release / prerelease / ci /
+      hotfix) instead of being nested under `<component>@ci`. Leave empty to nest
+      everything under ci.
     type: string
     default: ''
   - name: projectVersion
@@ -163,9 +180,23 @@ parameters:
     type: string
     default: 'false'
   - name: keep
-    displayName: Number of most recent children to retain when pruning.
+    displayName: |
+      Number of most recent children to retain when pruning under the default-branch
+      channel (the catch-all bucket, channel != ci / release / prerelease / hotfix).
+      Default 10.
     type: number
     default: 10
+  - name: ciKeep
+    displayName: |
+      Number of most recent children to retain under channel='ci'. Default 3.
+    type: number
+    default: 3
+  - name: releaseKeep
+    displayName: |
+      Number of most recent children to retain under channel='release', 'prerelease',
+      or 'hotfix'. Default 0 = keep all (no pruning).
+    type: number
+    default: 0
   - name: skipDtOnPullRequests
     displayName: Skip the DT bootstrap and upload steps when Build.Reason == PullRequest.
     type: boolean
@@ -208,48 +239,75 @@ jobs:
         parameters:
           scriptsDir:   $(pipelineToolsScriptsDir)
           solutionPath: ${{ parameters.solutionPath }}
-          outputPath:   ${{ parameters.bomPath }}
+          outputPath:   ${{ coalesce(parameters.bomPath, format('$(Build.ArtifactStagingDirectory)/sbom-{0}.cdx.json', parameters.component)) }}
           specVersion:  ${{ parameters.specVersion }}
           toolVersion:  ${{ parameters.cyclonedxToolVersion }}
 
-      # Suffix the artifact with $(System.JobAttempt) so "Re-run failed jobs"
-      # from the ADO UI doesn't collide with the artifact published on the
-      # earlier attempt. First-attempt artifacts get the suffix `-1`.
-      - publish: ${{ parameters.bomPath }}
-        artifact: ${{ parameters.bomArtifactName }}-$(System.JobAttempt)
-        displayName: Publish BOM artifact
+      # Per-component default for bomPath / bomArtifactName so dropping in
+      # multiple instances in the same job (monorepo) doesn't collide.
+      # `continueOnError: true` lets re-runs that hit an existing artifact name
+      # log a warning instead of failing - the BOM still uploads to DT.
+      - publish: ${{ coalesce(parameters.bomPath, format('$(Build.ArtifactStagingDirectory)/sbom-{0}.cdx.json', parameters.component)) }}
+        artifact: ${{ coalesce(parameters.bomArtifactName, format('sbom-{0}', parameters.component)) }}-$(System.JobAttempt)
+        displayName: Publish BOM artifact (${{ parameters.component }})
+        continueOnError: true
 
-      # Resolve the BOM's parent umbrella at runtime: subChannel if non-empty, else channel.
+      # Runtime resolution (caller may pass $(dtSubChannel) etc.):
+      #   __dtComposite_BomParentVersion: subChannel if non-empty, else channel
+      #   __dtComposite_PruneKeep:        channel-aware keep (releaseKeep / ciKeep / keep)
+      #   __dtComposite_EffectivePrune:   pruneStaleChildren AND keep > 0 (keep=0 = keep all)
       - bash: |
           set -eu
           SUBCH="$DT_SUBCHANNEL"
           CH="$DT_CHANNEL"
           PARENT_VERSION="${SUBCH:-$CH}"
-          echo "DT upload parent: ${DT_COMPONENT}@${PARENT_VERSION}"
+
+          case "$CH" in
+            release|prerelease|hotfix) EFFECTIVE_KEEP="$DT_RELEASE_KEEP" ;;
+            ci)                        EFFECTIVE_KEEP="$DT_CI_KEEP" ;;
+            *)                         EFFECTIVE_KEEP="$DT_KEEP" ;;
+          esac
+          if [ "$EFFECTIVE_KEEP" = "0" ]; then
+            EFFECTIVE_PRUNE=false
+          else
+            EFFECTIVE_PRUNE="$DT_PRUNE"
+          fi
+
+          echo "DT upload parent:    ${DT_COMPONENT}@${PARENT_VERSION}"
+          echo "Channel-aware keep:  ${EFFECTIVE_KEEP}"
+          echo "Effective prune:     ${EFFECTIVE_PRUNE}"
           echo "##vso[task.setvariable variable=__dtComposite_BomParentVersion]$PARENT_VERSION"
+          echo "##vso[task.setvariable variable=__dtComposite_PruneKeep]$EFFECTIVE_KEEP"
+          echo "##vso[task.setvariable variable=__dtComposite_EffectivePrune]$EFFECTIVE_PRUNE"
         env:
-          DT_CHANNEL:    ${{ parameters.channel }}
-          DT_SUBCHANNEL: ${{ parameters.subChannel }}
-          DT_COMPONENT:  ${{ parameters.component }}
-        displayName: 'Resolve DT upload parent'
+          DT_CHANNEL:      ${{ parameters.channel }}
+          DT_SUBCHANNEL:   ${{ parameters.subChannel }}
+          DT_COMPONENT:    ${{ parameters.component }}
+          DT_KEEP:         ${{ parameters.keep }}
+          DT_CI_KEEP:      ${{ parameters.ciKeep }}
+          DT_RELEASE_KEEP: ${{ parameters.releaseKeep }}
+          DT_PRUNE:        ${{ parameters.pruneStaleChildren }}
+        displayName: 'Resolve DT upload parent + prune policy'
         ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
           condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
 
       - template: ../step/dt/initialize-hierarchy.yaml
         parameters:
-          scriptsDir: $(pipelineToolsScriptsDir)
-          serverUrl:  ${{ parameters.dtServerUrl }}
-          apiKey:     ${{ parameters.dtApiKey }}
-          domain:     ${{ parameters.domain }}
-          system:     ${{ parameters.system }}
-          component:  ${{ parameters.component }}
-          channel:    ${{ parameters.channel }}
-          subChannel: ${{ parameters.subChannel }}
+          scriptsDir:    $(pipelineToolsScriptsDir)
+          serverUrl:     ${{ parameters.dtServerUrl }}
+          apiKey:        ${{ parameters.dtApiKey }}
+          domain:        ${{ parameters.domain }}
+          system:        ${{ parameters.system }}
+          component:     ${{ parameters.component }}
+          channel:       ${{ parameters.channel }}
+          subChannel:    ${{ parameters.subChannel }}
+          defaultBranch: ${{ parameters.defaultBranch }}
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
             condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
 
       - template: ../step/dt/send-bom.yaml
         parameters:
+          stepName:       dtUpload_${{ replace(parameters.component, '-', '_') }}
           scriptsDir:     $(pipelineToolsScriptsDir)
           serverUrl:      ${{ parameters.dtServerUrl }}
           apiKey:         ${{ parameters.dtApiKey }}
@@ -257,7 +315,7 @@ jobs:
           projectVersion: ${{ parameters.projectVersion }}
           parentName:     ${{ parameters.component }}
           parentVersion:  $(__dtComposite_BomParentVersion)
-          bomPath:        ${{ parameters.bomPath }}
+          bomPath:        ${{ coalesce(parameters.bomPath, format('$(Build.ArtifactStagingDirectory)/sbom-{0}.cdx.json', parameters.component)) }}
           projectTags:    ${{ parameters.projectTags }}
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
             condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
@@ -283,8 +341,8 @@ jobs:
           apiKey:        ${{ parameters.dtApiKey }}
           parentName:    ${{ parameters.component }}
           parentVersion: $(__dtComposite_BomParentVersion)
-          keep:          ${{ parameters.keep }}
+          keep:          $(__dtComposite_PruneKeep)
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
-            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.pruneStaleChildren }}', 'true'))
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['__dtComposite_EffectivePrune'], 'true'))
           ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
-            condition: and(succeeded(), eq('${{ parameters.pruneStaleChildren }}', 'true'))
+            condition: and(succeeded(), eq(variables['__dtComposite_EffectivePrune'], 'true'))

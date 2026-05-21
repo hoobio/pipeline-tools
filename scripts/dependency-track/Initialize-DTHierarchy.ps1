@@ -61,6 +61,15 @@ SubChannel="<branch-name>"). The composite step that consumes this bootstrap wil
 upload the per-build BOM as a child of <Component>@<SubChannel> instead of
 <Component>@<Channel>.
 
+.PARAMETER DefaultBranch
+Name of the repo's default branch (e.g. "main", "master", "develop"). Optional but
+strongly recommended when the consumer routes default-branch builds to their own
+top-level channel (rather than nesting under "ci"). Affects the v1 -> v2 migration
+sweep: when a legacy `<Component>@ci/<DefaultBranch>` project is found, it's promoted
+to top-level as `<Component>@<DefaultBranch>` (a sibling of release / prerelease / ci /
+hotfix) instead of being nested under `<Component>@ci`. Leave empty to keep legacy
+default-branch data nested under ci (treats it like any other branch).
+
 .PARAMETER Classifier
 DT project classifier applied to every grouping node. Defaults to PLATFORM, which
 matches the role of these nodes (umbrellas, not real applications).
@@ -94,6 +103,16 @@ leave the default unless you have a reason.
 Collection logic applied to the sub-channel umbrella. Defaults to
 AGGREGATE_LATEST_VERSION_CHILDREN, so the per-branch view rolls up only the latest
 per-build SBOM upload.
+
+.NOTES
+v1 -> v2 channel migration is always-on (no toggle): when invoked with the v2
+sub-channel pattern (Channel='ci' + SubChannel='<X>'), the script looks for a
+legacy `<Component>@ci/<X>` umbrella - the shape v1 produced when consumers
+passed `channel: ci/<branch>` as a single string. If found, every direct child
+of the legacy umbrella is re-parented to the newly-created
+`<Component>@<SubChannel>` umbrella and the empty legacy is deleted. Idempotent:
+subsequent runs find no legacy and no-op. Bumping to a major version that
+includes this script is the opt-in.
 #>
 [CmdletBinding()]
 param(
@@ -104,6 +123,7 @@ param(
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$Component,
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$Channel,
     [Parameter(Mandatory = $false)] [string]$SubChannel,
+    [Parameter(Mandatory = $false)] [string]$DefaultBranch,
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('APPLICATION','FRAMEWORK','LIBRARY','CONTAINER','OPERATING_SYSTEM','DEVICE','FIRMWARE','FILE','PLATFORM','DEVICE_DRIVER','MACHINE_LEARNING_MODEL','DATA','CRYPTOGRAPHIC_ASSET')]
@@ -299,9 +319,161 @@ $channelUuid = Sync-DTGroupingProject `
     -Name $Component -Version $Channel -ParentUuid $componentUuid `
     -DesiredClassifier $Classifier -DesiredCollectionLogic $ChannelCollectionLogic
 
+$subChannelUuid = $null
 if ($SubChannel) {
-    $null = Sync-DTGroupingProject `
+    $subChannelUuid = Sync-DTGroupingProject `
         -ServerUrl $ServerUrl -ApiKey $ApiKey `
         -Name $Component -Version $SubChannel -ParentUuid $channelUuid `
         -DesiredClassifier $Classifier -DesiredCollectionLogic $SubChannelCollectionLogic
+}
+
+# v1 -> v2 channel migration. v1 consumers passed `channel: ci/<branch>` as a
+# single string, producing `<Component>@ci/<branch>` projects with per-build SHAs
+# (or BOMs uploaded directly to the channel itself). v2's hierarchy is:
+#
+#   <Component>@component
+#     <Component>@release       (top-level - release tag uploads)
+#     <Component>@prerelease    (top-level - release-please / prerelease lane)
+#     <Component>@<DefaultBranch>  (top-level - default-branch builds, e.g. main)
+#     <Component>@hotfix        (top-level - gitflow hotfix lane)
+#     <Component>@ci            (top-level umbrella for feature-branch CI)
+#       <Component>@<branch>    (sub-channel - per feature branch)
+#
+# Sweep ALL legacy `<Component>@ci/<X>` projects on every bootstrap so a single
+# run after the major-version bump migrates the entire history. Bumping to this
+# major version IS the opt-in. Idempotent: subsequent runs find no legacy.
+#
+# Promotion rule: when -DefaultBranch is set and a legacy `<Component>@ci/<X>`
+# matches X == DefaultBranch, the legacy is migrated to top-level
+# (`<Component>@<X>`) as a sibling of release / prerelease / ci / hotfix rather
+# than nested under `<Component>@ci`. All other legacies nest under ci.
+#
+# Two legacy shapes are handled inside each migration:
+#
+#   PLATFORM legacy (umbrella with per-SHA APPLICATION children):
+#     1. Ensure the target umbrella exists (`<Component>@<X>` at top-level if
+#        promoted, or under `<Component>@ci` otherwise).
+#     2. Re-parent every direct child of `<Component>@ci/<X>` to the new
+#        target.
+#     3. Delete the now-empty `<Component>@ci/<X>`.
+#
+#   APPLICATION legacy (BOM uploaded directly to `<Component>@ci/<X>` without
+#   an intermediate per-SHA project, common when v1's autoCreate bootstrapped
+#   at the channel level):
+#     1. Ensure the target umbrella exists.
+#     2. Re-parent the legacy project itself (carrying its BOM data) under the
+#        target umbrella. Its version stays `ci/<X>` to avoid colliding with
+#        any existing project named `<Component>@<X>`, but it now hangs in the
+#        right place.
+$allComponent = & $invokeRest `
+    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+    -Method Get `
+    -Path "/api/v1/project" `
+    -Query @{
+        name = $Component
+        excludeInactive = 'false'
+        pageNumber = '1'
+        pageSize = '1000'
+    } `
+    -ExpectStatus 200
+
+$legacyList = @($allComponent.Body | Where-Object { $_.version -like 'ci/*' })
+
+if ($legacyList.Count -gt 0) {
+    Write-Information "Migration: found $($legacyList.Count) legacy v1 ci/<...> project(s) for $Component; rewriting under the v2 hierarchy" -InformationAction Continue
+
+    # Lazy-create the <Component>@ci umbrella (only needed if any non-default-branch
+    # legacy exists). When the current invocation is Channel='ci' it already exists
+    # ($channelUuid above is the ci umbrella). Otherwise create / look up here.
+    $ciUmbrellaUuid = if ($Channel -eq 'ci') { $channelUuid } else { $null }
+
+    foreach ($legacy in $legacyList) {
+        $legacyVer = $legacy.version
+        $X = $legacyVer.Substring(3)  # strip "ci/"
+
+        if ($DefaultBranch -and $X -eq $DefaultBranch) {
+            # Promote: target is top-level <Component>@<DefaultBranch>, sibling of release/ci/hotfix.
+            $promotedAlready = ($Channel -eq $X)
+            if ($promotedAlready) {
+                $targetUuid = $channelUuid
+            } else {
+                $targetUuid = Sync-DTGroupingProject `
+                    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                    -Name $Component -Version $X -ParentUuid $componentUuid `
+                    -DesiredClassifier $Classifier -DesiredCollectionLogic $ChannelCollectionLogic
+            }
+            $targetLabel = "$Component@$X (top-level, promoted as default branch)"
+        }
+        else {
+            # Nest under <Component>@ci as a sub-channel.
+            if (-not $ciUmbrellaUuid) {
+                $ciUmbrellaUuid = Sync-DTGroupingProject `
+                    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                    -Name $Component -Version 'ci' -ParentUuid $componentUuid `
+                    -DesiredClassifier $Classifier -DesiredCollectionLogic $ChannelCollectionLogic
+            }
+            $targetUuid = Sync-DTGroupingProject `
+                -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                -Name $Component -Version $X -ParentUuid $ciUmbrellaUuid `
+                -DesiredClassifier $Classifier -DesiredCollectionLogic $SubChannelCollectionLogic
+            $targetLabel = "$Component@$X (sub-channel under $Component@ci)"
+        }
+
+        if ($legacy.classifier -eq 'PLATFORM') {
+            # Umbrella: re-parent its per-SHA children, then delete it.
+            $children = & $invokeRest `
+                -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                -Method Get `
+                -Path "/api/v1/project/$($legacy.uuid)/children" `
+                -Query @{ pageNumber = '1'; pageSize = '1000' } `
+                -ExpectStatus 200
+
+            $childList = @($children.Body)
+            $moved = 0
+            foreach ($child in $childList) {
+                if (-not $child.uuid) { continue }
+
+                $resp = & $invokeRest `
+                    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                    -Method Patch `
+                    -Path "/api/v1/project/$($child.uuid)" `
+                    -Body @{ parent = @{ uuid = $targetUuid } } `
+                    -ExpectStatus 200, 304, 403, 404
+
+                if ($resp.StatusCode -eq 403) {
+                    throw "Dependency-Track refused PATCH with HTTP 403 while re-parenting $($child.name)@$($child.version) under $targetLabel. The supplied API key lacks PORTFOLIO_MANAGEMENT (required by PATCH /api/v1/project/{uuid}). Aborting migration before more children are moved."
+                }
+                if ($resp.StatusCode -in 200, 304) { $moved++ }
+            }
+
+            $del = & $invokeRest `
+                -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                -Method Delete `
+                -Path "/api/v1/project/$($legacy.uuid)" `
+                -ExpectStatus 200, 202, 204, 403, 404
+
+            if ($del.StatusCode -eq 403) {
+                Write-Warning "  Migrated $moved child(ren) from $Component@$legacyVer to $targetLabel, but DELETE of the legacy umbrella was refused (HTTP 403). It's now empty; delete it manually or re-run with PORTFOLIO_MANAGEMENT."
+            }
+            else {
+                Write-Information "  $Component@$legacyVer (umbrella, $moved children) -> $targetLabel" -InformationAction Continue
+            }
+        }
+        else {
+            # BOM upload itself - re-parent under the new target umbrella.
+            # Keep version as `ci/<X>` to avoid colliding with any existing
+            # `<Component>@<X>` project (e.g. the umbrella we just created).
+            $resp = & $invokeRest `
+                -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                -Method Patch `
+                -Path "/api/v1/project/$($legacy.uuid)" `
+                -Body @{ parent = @{ uuid = $targetUuid } } `
+                -ExpectStatus 200, 304, 403
+
+            if ($resp.StatusCode -eq 403) {
+                throw "Dependency-Track refused PATCH with HTTP 403 while re-parenting $Component@$legacyVer under $targetLabel. The supplied API key lacks PORTFOLIO_MANAGEMENT. Aborting migration."
+            }
+            Write-Information "  $Component@$legacyVer ($($legacy.classifier), BOM upload) -> $targetLabel" -InformationAction Continue
+        }
+    }
 }

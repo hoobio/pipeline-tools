@@ -59,6 +59,20 @@ inputs:
       sub-channel="<branch-name>" so non-default-branch CI builds group under a
       shared "ci" umbrella but each branch keeps its own SBOM history. Pass empty
       to skip.
+
+      On every bootstrap run, all legacy v1 `<component>@ci/<X>` projects are
+      swept into the v2 hierarchy: `<X>` matching `default-branch` (below) is
+      promoted to top-level `<component>@<X>`; everything else nests under
+      `<component>@ci`. Always-on, idempotent.
+    required: false
+    default: ''
+  default-branch:
+    description: |
+      Name of the repo's default branch (e.g. 'main', 'master'). Used by the
+      legacy v1 -> v2 sweep so a `<component>@ci/<default-branch>` project gets
+      promoted to top-level `<component>@<default-branch>` (sibling of release /
+      prerelease / ci / hotfix) instead of being nested under `<component>@ci`.
+      Leave empty to nest everything under ci.
     required: false
     default: ''
   classifier:
