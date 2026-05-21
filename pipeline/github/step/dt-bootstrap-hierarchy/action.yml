@@ -61,6 +61,15 @@ inputs:
       to skip.
     required: false
     default: ''
+  migrate-legacy-ci-channels:
+    description: |
+      When true (default), and the call uses channel="ci" + a sub-channel, the
+      script looks for a legacy v1 `<component>@ci/<sub-channel>` umbrella and
+      re-parents every child to the new `<component>@<sub-channel>` sub-channel
+      before deleting the empty legacy. Set 'false' to skip the migration and
+      leave legacy umbrellas in place.
+    required: false
+    default: 'true'
   classifier:
     description: |
       DT project classifier applied to every grouping node. Defaults to PLATFORM,
@@ -128,6 +137,7 @@ runs:
         DT_COMPONENT_COLLECTION_LOGIC: ${{ inputs.component-collection-logic }}
         DT_CHANNEL_COLLECTION_LOGIC: ${{ inputs.channel-collection-logic }}
         DT_SUBCHANNEL_COLLECTION_LOGIC: ${{ inputs.sub-channel-collection-logic }}
+        DT_MIGRATE_LEGACY_CI: ${{ inputs.migrate-legacy-ci-channels }}
       run: |
         $params = @{
           ServerUrl                 = $env:DT_SERVER_URL
@@ -142,6 +152,7 @@ runs:
           ComponentCollectionLogic  = $env:DT_COMPONENT_COLLECTION_LOGIC
           ChannelCollectionLogic    = $env:DT_CHANNEL_COLLECTION_LOGIC
           SubChannelCollectionLogic = $env:DT_SUBCHANNEL_COLLECTION_LOGIC
+          MigrateLegacyCiChannels   = ($env:DT_MIGRATE_LEGACY_CI -ieq 'true')
         }
         if ($env:DT_SUBCHANNEL) {
           $params.SubChannel = $env:DT_SUBCHANNEL

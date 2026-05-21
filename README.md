@@ -89,6 +89,8 @@ flowchart TB
 
 The `ci` channel exists only as a parent for sub-channels; SBOMs are never uploaded directly to `<Component>@ci`. Trunk-based repos typically use `release` + `<default-branch>` + `ci/<branch>`; gitflow repos add `prerelease` + `hotfix/<hotfix-id>`.
 
+**Legacy v1 channel migration.** v1 of these templates encoded non-default-branch CI uploads as a single `<component>@ci/<branch>` umbrella with build SHAs as direct children. v2 splits that into two umbrella levels (`<component>@ci` -> `<component>@<branch>` -> SHAs) for cleaner roll-up. When the bootstrap is invoked with the new shape (`channel: ci` + `subChannel: <branch>`), it auto-detects an existing legacy `<component>@ci/<branch>` umbrella, re-parents every child to the new sub-channel, and deletes the empty legacy. Idempotent: subsequent runs find no legacy and no-op. Opt out via `migrateLegacyCiChannels: 'false'` (ADO) / `migrate-legacy-ci-channels: 'false'` (GitHub) if you'd rather keep the legacy umbrella around.
+
 **Collection-logic note.** Each umbrella has a DT `collectionLogic` that controls how vulnerability metrics from below roll up. The defaults the bootstrap script applies:
 
 | Umbrella | Collection logic | Why |

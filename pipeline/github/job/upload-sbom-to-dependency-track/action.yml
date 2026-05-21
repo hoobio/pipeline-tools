@@ -138,6 +138,14 @@ inputs:
       `<component>@<channel>`.
     required: false
     default: ''
+  migrate-legacy-ci-channels:
+    description: |
+      When 'true' (default), and channel="ci" + sub-channel is set, the hierarchy
+      bootstrap also migrates legacy v1 `<component>@ci/<sub-channel>` umbrellas
+      into the new sub-channel structure (re-parents children, deletes legacy).
+      Set 'false' to leave legacy umbrellas in place.
+    required: false
+    default: 'true'
 
   project-version:
     description: Child project version.
@@ -245,13 +253,14 @@ runs:
     - name: Bootstrap Dependency-Track hierarchy
       uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@main
       with:
-        server-url:  ${{ inputs.server-url }}
-        api-key:     ${{ inputs.api-key }}
-        domain:      ${{ inputs.domain }}
-        system:      ${{ inputs.system }}
-        component:   ${{ inputs.component }}
-        channel:     ${{ inputs.channel }}
-        sub-channel: ${{ inputs.sub-channel }}
+        server-url:                 ${{ inputs.server-url }}
+        api-key:                    ${{ inputs.api-key }}
+        domain:                     ${{ inputs.domain }}
+        system:                     ${{ inputs.system }}
+        component:                  ${{ inputs.component }}
+        channel:                    ${{ inputs.channel }}
+        sub-channel:                ${{ inputs.sub-channel }}
+        migrate-legacy-ci-channels: ${{ inputs.migrate-legacy-ci-channels }}
 
     - id: upload
       name: Upload BOM to Dependency-Track

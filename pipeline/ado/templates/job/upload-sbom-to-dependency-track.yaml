@@ -142,6 +142,14 @@ parameters:
       upload as a child of <component>@<channel>.
     type: string
     default: ''
+  - name: migrateLegacyCiChannels
+    displayName: |
+      When 'true' (default), and channel="ci" + subChannel is set, the hierarchy
+      bootstrap also migrates legacy v1 `<component>@ci/<subChannel>` umbrellas
+      into the new sub-channel structure (re-parents children, deletes legacy).
+      Set 'false' to leave legacy umbrellas in place.
+    type: string
+    default: 'true'
   - name: projectVersion
     displayName: Child project version (typically the commit SHA).
     type: string
@@ -237,14 +245,15 @@ jobs:
 
       - template: ../step/dt/initialize-hierarchy.yaml
         parameters:
-          scriptsDir: $(pipelineToolsScriptsDir)
-          serverUrl:  ${{ parameters.dtServerUrl }}
-          apiKey:     ${{ parameters.dtApiKey }}
-          domain:     ${{ parameters.domain }}
-          system:     ${{ parameters.system }}
-          component:  ${{ parameters.component }}
-          channel:    ${{ parameters.channel }}
-          subChannel: ${{ parameters.subChannel }}
+          scriptsDir:              $(pipelineToolsScriptsDir)
+          serverUrl:               ${{ parameters.dtServerUrl }}
+          apiKey:                  ${{ parameters.dtApiKey }}
+          domain:                  ${{ parameters.domain }}
+          system:                  ${{ parameters.system }}
+          component:               ${{ parameters.component }}
+          channel:                 ${{ parameters.channel }}
+          subChannel:              ${{ parameters.subChannel }}
+          migrateLegacyCiChannels: ${{ parameters.migrateLegacyCiChannels }}
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
             condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
 
