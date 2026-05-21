@@ -256,6 +256,10 @@ jobs:
       #   __dtComposite_BomParentVersion: subChannel if non-empty, else channel
       #   __dtComposite_PruneKeep:        channel-aware keep (releaseKeep / ciKeep / keep)
       #   __dtComposite_EffectivePrune:   pruneStaleChildren AND keep > 0 (keep=0 = keep all)
+      #   __dtComposite_MarkLatest:       runtime mirror of markLatest so step conditions
+      #                                   can compare via `variables['...']`. ADO
+      #                                   `condition:` does not resolve `$(name)` syntax;
+      #                                   only the `variables[]` form is evaluated.
       - bash: |
           set -eu
           SUBCH="$DT_SUBCHANNEL"
@@ -276,9 +280,11 @@ jobs:
           echo "DT upload parent:    ${DT_COMPONENT}@${PARENT_VERSION}"
           echo "Channel-aware keep:  ${EFFECTIVE_KEEP}"
           echo "Effective prune:     ${EFFECTIVE_PRUNE}"
+          echo "Mark latest:         ${DT_MARK_LATEST}"
           echo "##vso[task.setvariable variable=__dtComposite_BomParentVersion]$PARENT_VERSION"
           echo "##vso[task.setvariable variable=__dtComposite_PruneKeep]$EFFECTIVE_KEEP"
           echo "##vso[task.setvariable variable=__dtComposite_EffectivePrune]$EFFECTIVE_PRUNE"
+          echo "##vso[task.setvariable variable=__dtComposite_MarkLatest]$DT_MARK_LATEST"
         env:
           DT_CHANNEL:      ${{ parameters.channel }}
           DT_SUBCHANNEL:   ${{ parameters.subChannel }}
@@ -287,6 +293,7 @@ jobs:
           DT_CI_KEEP:      ${{ parameters.ciKeep }}
           DT_RELEASE_KEEP: ${{ parameters.releaseKeep }}
           DT_PRUNE:        ${{ parameters.pruneStaleChildren }}
+          DT_MARK_LATEST:  ${{ parameters.markLatest }}
         displayName: 'Resolve DT upload parent + prune policy'
         ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
           condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
@@ -329,10 +336,12 @@ jobs:
           apiKey:         ${{ parameters.dtApiKey }}
           projectName:    ${{ parameters.component }}
           projectVersion: ${{ parameters.projectVersion }}
+          # See note above the resolve step: ADO `condition:` only evaluates
+          # runtime variables via `variables['name']`, not via `$(name)`.
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
-            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.markLatest }}', 'true'))
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['__dtComposite_MarkLatest'], 'true'))
           ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
-            condition: and(succeeded(), eq('${{ parameters.markLatest }}', 'true'))
+            condition: and(succeeded(), eq(variables['__dtComposite_MarkLatest'], 'true'))
 
       - template: ../step/dt/remove-stale-children.yaml
         parameters:
