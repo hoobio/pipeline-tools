@@ -24,8 +24,11 @@ parameters:
     type: string
   - name: keep
     displayName: Number of most recent children to retain.
-    type: number
-    default: 10
+    # Typed as string (not number) so callers can pass an ADO runtime variable
+    # like `$(__dtComposite_PruneKeep)`. ADO can't validate a $() expression
+    # against type:number at compile time; the script casts via [int] at runtime.
+    type: string
+    default: '10'
   - name: displayName
     displayName: Pipeline UI label for the generated step.
     type: string
