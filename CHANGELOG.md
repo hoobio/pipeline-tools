@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/hoobio/pipeline-tools/compare/v2.0.0...v2.1.0) (2026-05-21)
+
+
+### Features
+
+* **dt:** auto-migrate v1 ci/&lt;X&gt; legacies + channel-aware prune defaults ([#23](https://github.com/hoobio/pipeline-tools/issues/23)) ([90002c8](https://github.com/hoobio/pipeline-tools/commit/90002c80d80faecfe433c23f7d4aca0b0a69386c))
+
 ## [2.0.0](https://github.com/hoobio/pipeline-tools/compare/v1.6.0...v2.0.0) (2026-05-21)
 
 
