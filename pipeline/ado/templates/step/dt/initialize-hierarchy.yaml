@@ -51,9 +51,19 @@ parameters:
       subChannel="<branch-name>" so non-default-branch CI builds group under a shared
       "ci" umbrella but each branch keeps its own SBOM history. Pass empty to skip.
 
-      When invoked with this v2 sub-channel pattern, the bootstrap also auto-migrates
-      any legacy v1 `<component>@ci/<subChannel>` umbrella into the new structure
-      (re-parents children, deletes the empty legacy). Always-on, idempotent.
+      On every bootstrap run, all legacy v1 `<component>@ci/<X>` projects are swept
+      into the v2 hierarchy: `<X>` matching `defaultBranch` (below) is promoted to
+      top-level `<component>@<X>`; everything else nests under `<component>@ci`.
+      Always-on, idempotent.
+    type: string
+    default: ''
+  - name: defaultBranch
+    displayName: |
+      Name of the repo's default branch (e.g. 'main', 'master'). Used by the legacy
+      v1 -> v2 sweep so a `<component>@ci/<defaultBranch>` project gets promoted to
+      top-level `<component>@<defaultBranch>` (sibling of release / prerelease / ci /
+      hotfix) instead of being nested under `<component>@ci`. Leave empty to nest
+      everything under ci.
     type: string
     default: ''
   - name: displayName
@@ -78,18 +88,18 @@ steps:
         Component = $env:DT_COMPONENT
         Channel   = $env:DT_CHANNEL
       }
-      if ($env:DT_SUBCHANNEL) {
-        $params.SubChannel = $env:DT_SUBCHANNEL
-      }
+      if ($env:DT_SUBCHANNEL)    { $params.SubChannel    = $env:DT_SUBCHANNEL }
+      if ($env:DT_DEFAULT_BRANCH) { $params.DefaultBranch = $env:DT_DEFAULT_BRANCH }
       & "${{ parameters.scriptsDir }}/dependency-track/Initialize-DTHierarchy.ps1" @params
     env:
-      DT_SERVER_URL: ${{ parameters.serverUrl }}
-      DT_API_KEY:    ${{ parameters.apiKey }}
-      DT_DOMAIN:     ${{ parameters.domain }}
-      DT_SYSTEM:     ${{ parameters.system }}
-      DT_COMPONENT:  ${{ parameters.component }}
-      DT_CHANNEL:    ${{ parameters.channel }}
-      DT_SUBCHANNEL: ${{ parameters.subChannel }}
+      DT_SERVER_URL:     ${{ parameters.serverUrl }}
+      DT_API_KEY:        ${{ parameters.apiKey }}
+      DT_DOMAIN:         ${{ parameters.domain }}
+      DT_SYSTEM:         ${{ parameters.system }}
+      DT_COMPONENT:      ${{ parameters.component }}
+      DT_CHANNEL:        ${{ parameters.channel }}
+      DT_SUBCHANNEL:     ${{ parameters.subChannel }}
+      DT_DEFAULT_BRANCH: ${{ parameters.defaultBranch }}
     displayName: ${{ coalesce(parameters.displayName, format('Bootstrap DT hierarchy ({0}/{1}/{2}/{3})', parameters.domain, parameters.system, parameters.component, parameters.channel)) }}
     ${{ if ne(parameters.condition, '') }}:
       condition: ${{ parameters.condition }}

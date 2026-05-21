@@ -150,6 +150,15 @@ parameters:
       children, deletes the empty legacy). Always-on, idempotent.
     type: string
     default: ''
+  - name: defaultBranch
+    displayName: |
+      Name of the repo's default branch (e.g. 'main', 'master'). Used by the legacy
+      v1 -> v2 sweep so a `<component>@ci/<defaultBranch>` project gets promoted to
+      top-level `<component>@<defaultBranch>` (sibling of release / prerelease / ci /
+      hotfix) instead of being nested under `<component>@ci`. Leave empty to nest
+      everything under ci.
+    type: string
+    default: ''
   - name: projectVersion
     displayName: Child project version (typically the commit SHA).
     type: string
@@ -284,14 +293,15 @@ jobs:
 
       - template: ../step/dt/initialize-hierarchy.yaml
         parameters:
-          scriptsDir: $(pipelineToolsScriptsDir)
-          serverUrl:  ${{ parameters.dtServerUrl }}
-          apiKey:     ${{ parameters.dtApiKey }}
-          domain:     ${{ parameters.domain }}
-          system:     ${{ parameters.system }}
-          component:  ${{ parameters.component }}
-          channel:    ${{ parameters.channel }}
-          subChannel: ${{ parameters.subChannel }}
+          scriptsDir:    $(pipelineToolsScriptsDir)
+          serverUrl:     ${{ parameters.dtServerUrl }}
+          apiKey:        ${{ parameters.dtApiKey }}
+          domain:        ${{ parameters.domain }}
+          system:        ${{ parameters.system }}
+          component:     ${{ parameters.component }}
+          channel:       ${{ parameters.channel }}
+          subChannel:    ${{ parameters.subChannel }}
+          defaultBranch: ${{ parameters.defaultBranch }}
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
             condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
 

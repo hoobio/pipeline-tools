@@ -147,6 +147,15 @@ inputs:
       children, deletes the empty legacy). Always-on, idempotent.
     required: false
     default: ''
+  default-branch:
+    description: |
+      Name of the repo's default branch (e.g. 'main', 'master'). Used by the legacy
+      v1 -> v2 sweep so a `<component>@ci/<default-branch>` project gets promoted to
+      top-level `<component>@<default-branch>` (sibling of release / prerelease / ci /
+      hotfix) instead of being nested under `<component>@ci`. Leave empty to nest
+      everything under ci.
+    required: false
+    default: ''
 
   project-version:
     description: Child project version.
@@ -308,13 +317,14 @@ runs:
     - name: Bootstrap Dependency-Track hierarchy
       uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@feat/migrate-legacy-ci-channels
       with:
-        server-url:  ${{ inputs.server-url }}
-        api-key:     ${{ inputs.api-key }}
-        domain:      ${{ inputs.domain }}
-        system:      ${{ inputs.system }}
-        component:   ${{ inputs.component }}
-        channel:     ${{ inputs.channel }}
-        sub-channel: ${{ inputs.sub-channel }}
+        server-url:     ${{ inputs.server-url }}
+        api-key:        ${{ inputs.api-key }}
+        domain:         ${{ inputs.domain }}
+        system:         ${{ inputs.system }}
+        component:      ${{ inputs.component }}
+        channel:        ${{ inputs.channel }}
+        sub-channel:    ${{ inputs.sub-channel }}
+        default-branch: ${{ inputs.default-branch }}
 
     - id: upload
       name: Upload BOM to Dependency-Track
