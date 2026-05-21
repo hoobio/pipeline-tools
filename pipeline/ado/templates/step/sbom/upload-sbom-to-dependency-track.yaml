@@ -135,17 +135,22 @@ parameters:
     default: 'cyclonedx/cyclonedx-cli:0.27.2'
 
   - name: bomPath
-    displayName: Destination path for the generated CycloneDX BOM.
+    displayName: |
+      Destination path for the generated CycloneDX BOM. Default uses the component
+      name so multiple invocations in the same job (monorepo) don't trample each
+      other's files.
     type: string
-    default: $(Build.ArtifactStagingDirectory)/sbom.cdx.json
+    default: ''
   - name: publishArtifact
     displayName: Publish the BOM as a pipeline artifact.
     type: boolean
     default: true
   - name: bomArtifactName
-    displayName: Pipeline artifact name for the published BOM.
+    displayName: |
+      Pipeline artifact name for the published BOM. Default uses the component
+      name so multiple invocations in the same job (monorepo) don't collide.
     type: string
-    default: sbom-cyclonedx
+    default: ''
 
   # DT
   - name: dtServerUrl
@@ -171,16 +176,12 @@ parameters:
       Optional fifth-level bucket below the channel (e.g. branch name when channel="ci").
       When set, the BOM is uploaded as a child of <component>@<subChannel>. Pass empty to
       upload as a child of <component>@<channel>.
+
+      With channel="ci" + a subChannel, the bootstrap also auto-migrates any legacy
+      v1 `<component>@ci/<subChannel>` umbrella into the new structure (re-parents
+      children, deletes the empty legacy). Always-on, idempotent.
     type: string
     default: ''
-  - name: migrateLegacyCiChannels
-    displayName: |
-      When 'true' (default), and channel="ci" + subChannel is set, the hierarchy
-      bootstrap also migrates legacy v1 `<component>@ci/<subChannel>` umbrellas
-      into the new sub-channel structure (re-parents children, deletes legacy).
-      Set 'false' to leave legacy umbrellas in place.
-    type: string
-    default: 'true'
   - name: projectVersion
     displayName: Child project version (typically the commit SHA).
     type: string
@@ -225,14 +226,18 @@ steps:
       dotnetSpecVersion:  ${{ parameters.dotnetSpecVersion }}
       dotnetToolVersion:  ${{ parameters.dotnetToolVersion }}
       cycloneDxCliImage:  ${{ parameters.cycloneDxCliImage }}
-      outputPath:         ${{ parameters.bomPath }}
+      outputPath:         ${{ coalesce(parameters.bomPath, format('$(Build.ArtifactStagingDirectory)/sbom-{0}.cdx.json', parameters.component)) }}
 
   - ${{ if eq(parameters.publishArtifact, true) }}:
-      # Suffix with $(System.JobAttempt) so "Re-run failed jobs" from the ADO UI
-      # doesn't collide with the artifact published on the earlier attempt.
-      - publish: ${{ parameters.bomPath }}
-        artifact: ${{ parameters.bomArtifactName }}-$(System.JobAttempt)
-        displayName: Publish BOM artifact
+      # Defaults to `sbom-<component>` so monorepo consumers dropping in this
+      # composite for multiple components don't collide on artifact name.
+      # `continueOnError: true` so re-runs against a build that already published
+      # the same artifact name (e.g. from a previous attempt) don't fail the job -
+      # the BOM is still uploaded to DT, which is the load-bearing destination.
+      - publish: ${{ coalesce(parameters.bomPath, format('$(Build.ArtifactStagingDirectory)/sbom-{0}.cdx.json', parameters.component)) }}
+        artifact: ${{ coalesce(parameters.bomArtifactName, format('sbom-{0}', parameters.component)) }}-$(System.JobAttempt)
+        displayName: Publish BOM artifact (${{ parameters.component }})
+        continueOnError: true
 
   # Resolve the BOM's parent umbrella at runtime: subChannel if non-empty, else channel.
   # Done in shell so any runtime variable expansion of the parameter values is honoured
@@ -254,15 +259,14 @@ steps:
 
   - template: ../dt/initialize-hierarchy.yaml
     parameters:
-      scriptsDir:              ${{ parameters.scriptsDir }}
-      serverUrl:               ${{ parameters.dtServerUrl }}
-      apiKey:                  ${{ parameters.dtApiKey }}
-      domain:                  ${{ parameters.domain }}
-      system:                  ${{ parameters.system }}
-      component:               ${{ parameters.component }}
-      channel:                 ${{ parameters.channel }}
-      subChannel:              ${{ parameters.subChannel }}
-      migrateLegacyCiChannels: ${{ parameters.migrateLegacyCiChannels }}
+      scriptsDir: ${{ parameters.scriptsDir }}
+      serverUrl:  ${{ parameters.dtServerUrl }}
+      apiKey:     ${{ parameters.dtApiKey }}
+      domain:     ${{ parameters.domain }}
+      system:     ${{ parameters.system }}
+      component:  ${{ parameters.component }}
+      channel:    ${{ parameters.channel }}
+      subChannel: ${{ parameters.subChannel }}
       ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
         condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
 
@@ -280,7 +284,7 @@ steps:
       projectVersion: ${{ parameters.projectVersion }}
       parentName:     ${{ parameters.component }}
       parentVersion:  $(__dtComposite_BomParentVersion)
-      bomPath:        ${{ parameters.bomPath }}
+      bomPath:        ${{ coalesce(parameters.bomPath, format('$(Build.ArtifactStagingDirectory)/sbom-{0}.cdx.json', parameters.component)) }}
       projectTags:    ${{ parameters.projectTags }}
       ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
         condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))

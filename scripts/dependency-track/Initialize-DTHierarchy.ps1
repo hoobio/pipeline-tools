@@ -95,14 +95,15 @@ Collection logic applied to the sub-channel umbrella. Defaults to
 AGGREGATE_LATEST_VERSION_CHILDREN, so the per-branch view rolls up only the latest
 per-build SBOM upload.
 
-.PARAMETER MigrateLegacyCiChannels
-When set (default), and the call is using the v2 sub-channel pattern (Channel='ci' +
-SubChannel='<X>'), the script looks for a legacy `<Component>@ci/<X>` umbrella -
-the shape v1 produced when consumers passed `channel: ci/<branch>` as a single
-string. If found, every direct child of the legacy umbrella is re-parented to the
-newly-created `<Component>@<SubChannel>` umbrella and the empty legacy is deleted.
-This consolidates SBOM history after the v1 -> v2 hierarchy refactor without
-losing per-build records. Set to `$false` to leave legacy umbrellas in place.
+.NOTES
+v1 -> v2 channel migration is always-on (no toggle): when invoked with the v2
+sub-channel pattern (Channel='ci' + SubChannel='<X>'), the script looks for a
+legacy `<Component>@ci/<X>` umbrella - the shape v1 produced when consumers
+passed `channel: ci/<branch>` as a single string. If found, every direct child
+of the legacy umbrella is re-parented to the newly-created
+`<Component>@<SubChannel>` umbrella and the empty legacy is deleted. Idempotent:
+subsequent runs find no legacy and no-op. Bumping to a major version that
+includes this script is the opt-in.
 #>
 [CmdletBinding()]
 param(
@@ -136,10 +137,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('NONE','AGGREGATE_DIRECT_CHILDREN','AGGREGATE_DIRECT_CHILDREN_WITH_TAG','AGGREGATE_LATEST_VERSION_CHILDREN')]
-    [string]$SubChannelCollectionLogic = 'AGGREGATE_LATEST_VERSION_CHILDREN',
-
-    [Parameter(Mandatory = $false)]
-    [bool]$MigrateLegacyCiChannels = $true
+    [string]$SubChannelCollectionLogic = 'AGGREGATE_LATEST_VERSION_CHILDREN'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -324,9 +322,10 @@ if ($SubChannel) {
 # children directly underneath. In v2 the same data lives under
 # `<Component>@ci -> <Component>@<branch> -> children`. When invoked with the new
 # pattern, detect the legacy umbrella, move every direct child to the new
-# sub-channel umbrella, then delete the empty legacy. Opt-out via
-# -MigrateLegacyCiChannels:$false. Idempotent: subsequent runs find no legacy.
-if ($MigrateLegacyCiChannels -and $Channel -eq 'ci' -and $SubChannel -and $subChannelUuid) {
+# sub-channel umbrella, then delete the empty legacy. Always-on (no toggle);
+# bumping to this major version is the opt-in. Idempotent: subsequent runs find
+# no legacy and no-op.
+if ($Channel -eq 'ci' -and $SubChannel -and $subChannelUuid) {
     $legacyVersion = "ci/$SubChannel"
     $legacy = Get-DTProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Component -Version $legacyVersion
 

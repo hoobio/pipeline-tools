@@ -92,9 +92,11 @@ inputs:
   generated-bom-path:
     description: |
       Output path used when this action generates the BOM (bom-path empty).
+      Defaults to `sbom-<component>.cdx.json` so monorepo workflows running the
+      action against multiple components don't trample each other's files.
       Ignored when bom-path is set.
     required: false
-    default: sbom.cdx.json
+    default: ''
 
   # ----- Artifact upload -----
   upload-artifact:
@@ -102,9 +104,12 @@ inputs:
     required: false
     default: 'true'
   artifact-name:
-    description: Workflow artifact name (used when upload-artifact is 'true').
+    description: |
+      Workflow artifact name (used when upload-artifact is 'true'). Defaults to
+      `sbom-<component>` so monorepo workflows running the action against
+      multiple components don't collide.
     required: false
-    default: sbom-cyclonedx
+    default: ''
 
   # ----- DT -----
   server-url:
@@ -136,16 +141,12 @@ inputs:
       channel="ci"). When set, the BOM is uploaded as a child of
       `<component>@<sub-channel>`. When empty, the BOM is uploaded as a child of
       `<component>@<channel>`.
+
+      With channel="ci" + a sub-channel, the bootstrap also auto-migrates any legacy
+      v1 `<component>@ci/<sub-channel>` umbrella into the new structure (re-parents
+      children, deletes the empty legacy). Always-on, idempotent.
     required: false
     default: ''
-  migrate-legacy-ci-channels:
-    description: |
-      When 'true' (default), and channel="ci" + sub-channel is set, the hierarchy
-      bootstrap also migrates legacy v1 `<component>@ci/<sub-channel>` umbrellas
-      into the new sub-channel structure (re-parents children, deletes legacy).
-      Set 'false' to leave legacy umbrellas in place.
-    required: false
-    default: 'true'
 
   project-version:
     description: Child project version.
@@ -189,7 +190,7 @@ outputs:
     description: |
       Resolved path to the BOM (either the user-supplied `bom-path` or the
       generated path when the action generated it).
-    value: ${{ steps.resolve-bom.outputs.path }}
+    value: ${{ steps.paths.outputs.resolved }}
   upload-token:
     description: |
       DT upload token returned by the BOM upload (masked in logs). Use this when
@@ -200,6 +201,26 @@ outputs:
 runs:
   using: composite
   steps:
+    # Resolve effective paths + artifact name BEFORE anything writes to disk.
+    # Component-based defaults so monorepo workflows running this action against
+    # multiple components in the same job don't collide on paths or artifact
+    # names.
+    - id: paths
+      name: Resolve BOM paths
+      shell: pwsh
+      env:
+        BOM_PATH:           ${{ inputs.bom-path }}
+        GENERATED_BOM_PATH: ${{ inputs.generated-bom-path }}
+        ARTIFACT_NAME:      ${{ inputs.artifact-name }}
+        COMPONENT:          ${{ inputs.component }}
+      run: |
+        $generated = if ([string]::IsNullOrEmpty($env:GENERATED_BOM_PATH)) { "sbom-$($env:COMPONENT).cdx.json" } else { $env:GENERATED_BOM_PATH }
+        $resolved  = if ([string]::IsNullOrEmpty($env:BOM_PATH))           { $generated }                       else { $env:BOM_PATH }
+        $artifact  = if ([string]::IsNullOrEmpty($env:ARTIFACT_NAME))      { "sbom-$($env:COMPONENT)" }         else { $env:ARTIFACT_NAME }
+        "generated=$generated" >> $env:GITHUB_OUTPUT
+        "resolved=$resolved"   >> $env:GITHUB_OUTPUT
+        "artifact=$artifact"   >> $env:GITHUB_OUTPUT
+
     - name: Generate CycloneDX BOM
       if: inputs.bom-path == ''
       uses: hoobio/pipeline-tools/pipeline/github/step/build-cyclonedx-sbom@main
@@ -215,20 +236,16 @@ runs:
         dotnet-spec-version:   ${{ inputs.dotnet-spec-version }}
         dotnet-tool-version:   ${{ inputs.dotnet-tool-version }}
         cyclonedx-cli-image:   ${{ inputs.cyclonedx-cli-image }}
-        output-path:           ${{ inputs.generated-bom-path }}
+        output-path:           ${{ steps.paths.outputs.generated }}
 
-    - id: resolve-bom
-      name: Resolve effective BOM path
+    - name: Verify BOM exists
       shell: pwsh
       env:
-        BOM_PATH:           ${{ inputs.bom-path }}
-        GENERATED_BOM_PATH: ${{ inputs.generated-bom-path }}
+        RESOLVED: ${{ steps.paths.outputs.resolved }}
       run: |
-        $resolved = if ([string]::IsNullOrEmpty($env:BOM_PATH)) { $env:GENERATED_BOM_PATH } else { $env:BOM_PATH }
-        if (-not (Test-Path -LiteralPath $resolved)) {
-          throw "Resolved BOM path '$resolved' does not exist."
+        if (-not (Test-Path -LiteralPath $env:RESOLVED)) {
+          throw "Resolved BOM path '$env:RESOLVED' does not exist."
         }
-        "path=$resolved" >> $env:GITHUB_OUTPUT
 
     - name: Resolve DT upload parent
       id: parent
@@ -246,21 +263,23 @@ runs:
       if: inputs.upload-artifact == 'true'
       uses: actions/upload-artifact@v7
       with:
-        name: ${{ inputs.artifact-name }}
-        path: ${{ steps.resolve-bom.outputs.path }}
+        name: ${{ steps.paths.outputs.artifact }}
+        path: ${{ steps.paths.outputs.resolved }}
         if-no-files-found: error
+        # Re-runs of the same workflow attempt would otherwise fail on an
+        # existing artifact name; overwrite keeps the latest BOM.
+        overwrite: true
 
     - name: Bootstrap Dependency-Track hierarchy
       uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@main
       with:
-        server-url:                 ${{ inputs.server-url }}
-        api-key:                    ${{ inputs.api-key }}
-        domain:                     ${{ inputs.domain }}
-        system:                     ${{ inputs.system }}
-        component:                  ${{ inputs.component }}
-        channel:                    ${{ inputs.channel }}
-        sub-channel:                ${{ inputs.sub-channel }}
-        migrate-legacy-ci-channels: ${{ inputs.migrate-legacy-ci-channels }}
+        server-url:  ${{ inputs.server-url }}
+        api-key:     ${{ inputs.api-key }}
+        domain:      ${{ inputs.domain }}
+        system:      ${{ inputs.system }}
+        component:   ${{ inputs.component }}
+        channel:     ${{ inputs.channel }}
+        sub-channel: ${{ inputs.sub-channel }}
 
     - id: upload
       name: Upload BOM to Dependency-Track
@@ -272,7 +291,7 @@ runs:
         DT_PROJECT_VERSION: ${{ inputs.project-version }}
         DT_PARENT_NAME:     ${{ inputs.component }}
         DT_PARENT_VERSION:  ${{ steps.parent.outputs.version }}
-        DT_BOM_PATH:        ${{ steps.resolve-bom.outputs.path }}
+        DT_BOM_PATH:        ${{ steps.paths.outputs.resolved }}
         DT_PROJECT_TAGS:    ${{ inputs.project-tags }}
       run: |
         $params = @{

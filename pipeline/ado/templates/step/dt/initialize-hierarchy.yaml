@@ -50,17 +50,12 @@ parameters:
       Optional fifth-level bucket below the channel. Typical use: channel="ci" with
       subChannel="<branch-name>" so non-default-branch CI builds group under a shared
       "ci" umbrella but each branch keeps its own SBOM history. Pass empty to skip.
+
+      When invoked with this v2 sub-channel pattern, the bootstrap also auto-migrates
+      any legacy v1 `<component>@ci/<subChannel>` umbrella into the new structure
+      (re-parents children, deletes the empty legacy). Always-on, idempotent.
     type: string
     default: ''
-  - name: migrateLegacyCiChannels
-    displayName: |
-      When true (default), and the call uses channel="ci" + a subChannel, the script
-      looks for a legacy v1 `<component>@ci/<subChannel>` umbrella and re-parents
-      every child to the new `<component>@<subChannel>` sub-channel before deleting
-      the empty legacy. Set 'false' to skip the migration and leave legacy umbrellas
-      in place.
-    type: string
-    default: 'true'
   - name: displayName
     displayName: Pipeline UI label for the generated step.
     type: string
@@ -86,17 +81,15 @@ steps:
       if ($env:DT_SUBCHANNEL) {
         $params.SubChannel = $env:DT_SUBCHANNEL
       }
-      $params.MigrateLegacyCiChannels = ($env:DT_MIGRATE_LEGACY_CI -ieq 'true')
       & "${{ parameters.scriptsDir }}/dependency-track/Initialize-DTHierarchy.ps1" @params
     env:
-      DT_SERVER_URL:           ${{ parameters.serverUrl }}
-      DT_API_KEY:              ${{ parameters.apiKey }}
-      DT_DOMAIN:               ${{ parameters.domain }}
-      DT_SYSTEM:               ${{ parameters.system }}
-      DT_COMPONENT:            ${{ parameters.component }}
-      DT_CHANNEL:              ${{ parameters.channel }}
-      DT_SUBCHANNEL:           ${{ parameters.subChannel }}
-      DT_MIGRATE_LEGACY_CI:    ${{ parameters.migrateLegacyCiChannels }}
+      DT_SERVER_URL: ${{ parameters.serverUrl }}
+      DT_API_KEY:    ${{ parameters.apiKey }}
+      DT_DOMAIN:     ${{ parameters.domain }}
+      DT_SYSTEM:     ${{ parameters.system }}
+      DT_COMPONENT:  ${{ parameters.component }}
+      DT_CHANNEL:    ${{ parameters.channel }}
+      DT_SUBCHANNEL: ${{ parameters.subChannel }}
     displayName: ${{ coalesce(parameters.displayName, format('Bootstrap DT hierarchy ({0}/{1}/{2}/{3})', parameters.domain, parameters.system, parameters.component, parameters.channel)) }}
     ${{ if ne(parameters.condition, '') }}:
       condition: ${{ parameters.condition }}
