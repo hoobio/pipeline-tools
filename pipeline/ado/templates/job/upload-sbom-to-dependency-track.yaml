@@ -171,9 +171,23 @@ parameters:
     type: string
     default: 'false'
   - name: keep
-    displayName: Number of most recent children to retain when pruning.
+    displayName: |
+      Number of most recent children to retain when pruning under the default-branch
+      channel (the catch-all bucket, channel != ci / release / prerelease / hotfix).
+      Default 10.
     type: number
     default: 10
+  - name: ciKeep
+    displayName: |
+      Number of most recent children to retain under channel='ci'. Default 3.
+    type: number
+    default: 3
+  - name: releaseKeep
+    displayName: |
+      Number of most recent children to retain under channel='release', 'prerelease',
+      or 'hotfix'. Default 0 = keep all (no pruning).
+    type: number
+    default: 0
   - name: skipDtOnPullRequests
     displayName: Skip the DT bootstrap and upload steps when Build.Reason == PullRequest.
     type: boolean
@@ -229,19 +243,42 @@ jobs:
         displayName: Publish BOM artifact (${{ parameters.component }})
         continueOnError: true
 
-      # Resolve the BOM's parent umbrella at runtime: subChannel if non-empty, else channel.
+      # Runtime resolution (caller may pass $(dtSubChannel) etc.):
+      #   __dtComposite_BomParentVersion: subChannel if non-empty, else channel
+      #   __dtComposite_PruneKeep:        channel-aware keep (releaseKeep / ciKeep / keep)
+      #   __dtComposite_EffectivePrune:   pruneStaleChildren AND keep > 0 (keep=0 = keep all)
       - bash: |
           set -eu
           SUBCH="$DT_SUBCHANNEL"
           CH="$DT_CHANNEL"
           PARENT_VERSION="${SUBCH:-$CH}"
-          echo "DT upload parent: ${DT_COMPONENT}@${PARENT_VERSION}"
+
+          case "$CH" in
+            release|prerelease|hotfix) EFFECTIVE_KEEP="$DT_RELEASE_KEEP" ;;
+            ci)                        EFFECTIVE_KEEP="$DT_CI_KEEP" ;;
+            *)                         EFFECTIVE_KEEP="$DT_KEEP" ;;
+          esac
+          if [ "$EFFECTIVE_KEEP" = "0" ]; then
+            EFFECTIVE_PRUNE=false
+          else
+            EFFECTIVE_PRUNE="$DT_PRUNE"
+          fi
+
+          echo "DT upload parent:    ${DT_COMPONENT}@${PARENT_VERSION}"
+          echo "Channel-aware keep:  ${EFFECTIVE_KEEP}"
+          echo "Effective prune:     ${EFFECTIVE_PRUNE}"
           echo "##vso[task.setvariable variable=__dtComposite_BomParentVersion]$PARENT_VERSION"
+          echo "##vso[task.setvariable variable=__dtComposite_PruneKeep]$EFFECTIVE_KEEP"
+          echo "##vso[task.setvariable variable=__dtComposite_EffectivePrune]$EFFECTIVE_PRUNE"
         env:
-          DT_CHANNEL:    ${{ parameters.channel }}
-          DT_SUBCHANNEL: ${{ parameters.subChannel }}
-          DT_COMPONENT:  ${{ parameters.component }}
-        displayName: 'Resolve DT upload parent'
+          DT_CHANNEL:      ${{ parameters.channel }}
+          DT_SUBCHANNEL:   ${{ parameters.subChannel }}
+          DT_COMPONENT:    ${{ parameters.component }}
+          DT_KEEP:         ${{ parameters.keep }}
+          DT_CI_KEEP:      ${{ parameters.ciKeep }}
+          DT_RELEASE_KEEP: ${{ parameters.releaseKeep }}
+          DT_PRUNE:        ${{ parameters.pruneStaleChildren }}
+        displayName: 'Resolve DT upload parent + prune policy'
         ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
           condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
 
@@ -294,8 +331,8 @@ jobs:
           apiKey:        ${{ parameters.dtApiKey }}
           parentName:    ${{ parameters.component }}
           parentVersion: $(__dtComposite_BomParentVersion)
-          keep:          ${{ parameters.keep }}
+          keep:          $(__dtComposite_PruneKeep)
           ${{ if eq(parameters.skipDtOnPullRequests, true) }}:
-            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq('${{ parameters.pruneStaleChildren }}', 'true'))
+            condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['__dtComposite_EffectivePrune'], 'true'))
           ${{ if eq(parameters.skipDtOnPullRequests, false) }}:
-            condition: and(succeeded(), eq('${{ parameters.pruneStaleChildren }}', 'true'))
+            condition: and(succeeded(), eq(variables['__dtComposite_EffectivePrune'], 'true'))

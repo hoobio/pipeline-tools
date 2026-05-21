@@ -164,13 +164,28 @@ inputs:
   prune-stale-children:
     description: |
       After upload, prune stale children under the upload parent, keeping the most
-      recent `keep`.
+      recent `keep` (channel-aware - see `keep`, `ci-keep`, `release-keep`).
     required: false
     default: 'false'
   keep:
-    description: Number of most recent children to retain when pruning.
+    description: |
+      Number of most recent children to retain under the default-branch channel
+      (channel != ci / release / prerelease / hotfix). Default 10.
     required: false
     default: '10'
+  ci-keep:
+    description: |
+      Number of most recent children to retain under channel='ci'. Feature-branch
+      CI builds accumulate quickly; default is aggressive (3).
+    required: false
+    default: '3'
+  release-keep:
+    description: |
+      Number of most recent children to retain under channel='release', 'prerelease',
+      or 'hotfix' (release-please / gitflow release lanes). Default 0 = keep all
+      (no pruning); every released version is historically meaningful.
+    required: false
+    default: '0'
 
   wait-for-processing:
     description: Poll DT until BOM processing completes before continuing the job.
@@ -247,17 +262,37 @@ runs:
           throw "Resolved BOM path '$env:RESOLVED' does not exist."
         }
 
-    - name: Resolve DT upload parent
+    - name: Resolve DT upload parent + prune policy
       id: parent
       shell: pwsh
       env:
-        DT_CHANNEL:    ${{ inputs.channel }}
-        DT_SUBCHANNEL: ${{ inputs.sub-channel }}
-        DT_COMPONENT:  ${{ inputs.component }}
+        DT_CHANNEL:      ${{ inputs.channel }}
+        DT_SUBCHANNEL:   ${{ inputs.sub-channel }}
+        DT_COMPONENT:    ${{ inputs.component }}
+        DT_KEEP:         ${{ inputs.keep }}
+        DT_CI_KEEP:      ${{ inputs.ci-keep }}
+        DT_RELEASE_KEEP: ${{ inputs.release-keep }}
+        DT_PRUNE:        ${{ inputs.prune-stale-children }}
       run: |
         $parent = if ([string]::IsNullOrEmpty($env:DT_SUBCHANNEL)) { $env:DT_CHANNEL } else { $env:DT_SUBCHANNEL }
-        Write-Host "DT upload parent: $($env:DT_COMPONENT)@$parent"
-        "version=$parent" >> $env:GITHUB_OUTPUT
+
+        $effectiveKeep = switch ($env:DT_CHANNEL) {
+          'release'    { $env:DT_RELEASE_KEEP }
+          'prerelease' { $env:DT_RELEASE_KEEP }
+          'hotfix'     { $env:DT_RELEASE_KEEP }
+          'ci'         { $env:DT_CI_KEEP }
+          default      { $env:DT_KEEP }
+        }
+        # keep=0 sentinel = "keep all"; short-circuit prune to false so no
+        # prune step ever fires regardless of inputs.prune-stale-children.
+        $effectivePrune = if ($effectiveKeep -eq '0') { 'false' } else { $env:DT_PRUNE }
+
+        Write-Host "DT upload parent:   $($env:DT_COMPONENT)@$parent"
+        Write-Host "Channel-aware keep: $effectiveKeep"
+        Write-Host "Effective prune:    $effectivePrune"
+        "version=$parent"          >> $env:GITHUB_OUTPUT
+        "keep=$effectiveKeep"      >> $env:GITHUB_OUTPUT
+        "prune=$effectivePrune"    >> $env:GITHUB_OUTPUT
 
     - name: Upload BOM as workflow artifact
       if: inputs.upload-artifact == 'true'
@@ -346,14 +381,14 @@ runs:
           -ProjectVersion $env:DT_PROJECT_VERSION
 
     - name: Prune stale child projects under parent
-      if: inputs.prune-stale-children == 'true'
+      if: steps.parent.outputs.prune == 'true'
       shell: pwsh
       env:
         DT_SERVER_URL:     ${{ inputs.server-url }}
         DT_API_KEY:        ${{ inputs.api-key }}
         DT_PARENT_NAME:    ${{ inputs.component }}
         DT_PARENT_VERSION: ${{ steps.parent.outputs.version }}
-        DT_KEEP:           ${{ inputs.keep }}
+        DT_KEEP:           ${{ steps.parent.outputs.keep }}
       run: |
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Remove-DTStaleChildren.ps1" `
           -ServerUrl $env:DT_SERVER_URL `

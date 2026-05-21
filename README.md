@@ -89,7 +89,17 @@ flowchart TB
 
 The `ci` channel exists only as a parent for sub-channels; SBOMs are never uploaded directly to `<Component>@ci`. Trunk-based repos typically use `release` + `<default-branch>` + `ci/<branch>`; gitflow repos add `prerelease` + `hotfix/<hotfix-id>`.
 
-**Legacy v1 channel migration.** v1 of these templates encoded non-default-branch CI uploads as a single `<component>@ci/<branch>` umbrella with build SHAs as direct children. v2 splits that into two umbrella levels (`<component>@ci` -> `<component>@<branch>` -> SHAs) for cleaner roll-up. When the bootstrap is invoked with the new shape (`channel: ci` + `subChannel: <branch>`), it auto-detects an existing legacy `<component>@ci/<branch>` umbrella, re-parents every child to the new sub-channel, and deletes the empty legacy. Always-on (the major-version bump is the opt-in) and idempotent: subsequent runs find no legacy and no-op.
+**Legacy v1 channel migration.** v1 of these templates encoded non-default-branch CI uploads as a single `<component>@ci/<branch>` umbrella with build SHAs as direct children. v2 splits that into two umbrella levels (`<component>@ci` -> `<component>@<branch>` -> SHAs) for cleaner roll-up. On every bootstrap run with `channel: ci`, the script sweeps EVERY existing `<component>@ci/<X>` project (not just the one for the current invocation's sub-channel): PLATFORM-classified umbrellas have their per-SHA children re-parented to the new `<component>@<X>` sub-channel and then get deleted; APPLICATION-classified legacy projects (BOMs that v1 uploaded directly to the channel level) get re-parented under the new sub-channel umbrella while keeping their version string to avoid collisions. Always-on (the major-version bump is the opt-in) and idempotent: subsequent runs find no legacy and no-op.
+
+**Channel-aware prune defaults.** When `prune-stale-children` is enabled, the number of children retained depends on the channel:
+
+| Channel | Default `keep` | Override input |
+|---|---|---|
+| `release`, `prerelease`, `hotfix` | **0 = keep all** (release lanes are historically meaningful) | `releaseKeep` / `release-keep` |
+| `ci` (with sub-channel) | **3** (feature-branch builds churn fast) | `ciKeep` / `ci-keep` |
+| default-branch and anything else | **10** | `keep` |
+
+A keep of `0` is a sentinel: even if the consumer sets `prune-stale-children: true`, no prune fires when the resolved keep is 0. This means release lanes can be left with `prune-stale-children: true` everywhere - the channel-aware default takes care of preserving release history.
 
 **Collection-logic note.** Each umbrella has a DT `collectionLogic` that controls how vulnerability metrics from below roll up. The defaults the bootstrap script applies:
 

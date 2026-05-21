@@ -318,64 +318,116 @@ if ($SubChannel) {
 }
 
 # v1 -> v2 channel migration. In v1, consumers passed `channel: ci/<branch>` as a
-# single string, producing a `<Component>@ci/<branch>` umbrella with per-build
-# children directly underneath. In v2 the same data lives under
-# `<Component>@ci -> <Component>@<branch> -> children`. When invoked with the new
-# pattern, detect the legacy umbrella, move every direct child to the new
-# sub-channel umbrella, then delete the empty legacy. Always-on (no toggle);
-# bumping to this major version is the opt-in. Idempotent: subsequent runs find
-# no legacy and no-op.
-if ($Channel -eq 'ci' -and $SubChannel -and $subChannelUuid) {
-    $legacyVersion = "ci/$SubChannel"
-    $legacy = Get-DTProject -ServerUrl $ServerUrl -ApiKey $ApiKey -Name $Component -Version $legacyVersion
+# single string, producing `<Component>@ci/<branch>` projects with per-build SHAs
+# (or BOMs uploaded directly to the channel itself). In v2 the same data lives
+# under `<Component>@ci -> <Component>@<branch> -> children`.
+#
+# Sweep ALL legacy `<Component>@ci/<X>` projects on every bootstrap (not just the
+# one matching the current invocation's SubChannel) so a single run after the
+# major-version bump migrates the entire history. Bumping to this major version
+# IS the opt-in. Idempotent: subsequent runs find no legacy and no-op.
+#
+# Two legacy shapes are handled:
+#
+#   PLATFORM legacy (umbrella with per-SHA APPLICATION children):
+#     1. Ensure `<Component>@<X>` sub-channel exists under the new
+#        `<Component>@ci` umbrella.
+#     2. Re-parent every direct child of `<Component>@ci/<X>` to the new
+#        sub-channel.
+#     3. Delete the now-empty `<Component>@ci/<X>`.
+#
+#   APPLICATION legacy (BOM was uploaded directly to `<Component>@ci/<X>`
+#   without an intermediate per-SHA project, common when v1's autoCreate
+#   bootstrapped at the channel level):
+#     1. Ensure `<Component>@<X>` sub-channel exists.
+#     2. Re-parent the legacy project itself (carrying its BOM data) under the
+#        new sub-channel. Its version stays `ci/<X>` to avoid colliding with
+#        any existing project named after the new structure, but it now hangs
+#        in the right place.
+if ($Channel -eq 'ci') {
+    $allComponent = & $invokeRest `
+        -ServerUrl $ServerUrl -ApiKey $ApiKey `
+        -Method Get `
+        -Path "/api/v1/project" `
+        -Query @{
+            name = $Component
+            excludeInactive = 'false'
+            pageNumber = '1'
+            pageSize = '1000'
+        } `
+        -ExpectStatus 200
 
-    if ($legacy) {
-        Write-Information "Legacy v1 umbrella $Component@$legacyVersion found (uuid=$($legacy.uuid)); migrating children to $Component@$SubChannel" -InformationAction Continue
+    $legacyList = @($allComponent.Body | Where-Object { $_.version -like 'ci/*' })
 
-        $children = & $invokeRest `
+    if ($legacyList.Count -gt 0) {
+        Write-Information "Migration: found $($legacyList.Count) legacy v1 ci/<...> project(s) for $Component; rewriting under the v2 sub-channel hierarchy" -InformationAction Continue
+    }
+
+    foreach ($legacy in $legacyList) {
+        $legacyVer = $legacy.version
+        $subName = $legacyVer.Substring(3)  # strip "ci/"
+
+        # Get/create the new sub-channel umbrella under <Component>@ci.
+        $newSubUuid = Sync-DTGroupingProject `
             -ServerUrl $ServerUrl -ApiKey $ApiKey `
-            -Method Get `
-            -Path "/api/v1/project/$($legacy.uuid)/children" `
-            -Query @{ pageNumber = '1'; pageSize = '1000' } `
-            -ExpectStatus 200
+            -Name $Component -Version $subName -ParentUuid $channelUuid `
+            -DesiredClassifier $Classifier -DesiredCollectionLogic $SubChannelCollectionLogic
 
-        $childList = @($children.Body)
-        $moved = 0
-        foreach ($child in $childList) {
-            if (-not $child.uuid) { continue }
+        if ($legacy.classifier -eq 'PLATFORM') {
+            # Umbrella: re-parent its per-SHA children, then delete it.
+            $children = & $invokeRest `
+                -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                -Method Get `
+                -Path "/api/v1/project/$($legacy.uuid)/children" `
+                -Query @{ pageNumber = '1'; pageSize = '1000' } `
+                -ExpectStatus 200
 
+            $childList = @($children.Body)
+            $moved = 0
+            foreach ($child in $childList) {
+                if (-not $child.uuid) { continue }
+
+                $resp = & $invokeRest `
+                    -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                    -Method Patch `
+                    -Path "/api/v1/project/$($child.uuid)" `
+                    -Body @{ parent = @{ uuid = $newSubUuid } } `
+                    -ExpectStatus 200, 304, 403, 404
+
+                if ($resp.StatusCode -eq 403) {
+                    throw "Dependency-Track refused PATCH with HTTP 403 while re-parenting $($child.name)@$($child.version) under $Component@$subName. The supplied API key lacks PORTFOLIO_MANAGEMENT (required by PATCH /api/v1/project/{uuid}). Aborting migration before more children are moved."
+                }
+                if ($resp.StatusCode -in 200, 304) { $moved++ }
+            }
+
+            $del = & $invokeRest `
+                -ServerUrl $ServerUrl -ApiKey $ApiKey `
+                -Method Delete `
+                -Path "/api/v1/project/$($legacy.uuid)" `
+                -ExpectStatus 200, 202, 204, 403, 404
+
+            if ($del.StatusCode -eq 403) {
+                Write-Warning "  Migrated $moved child(ren) from $Component@$legacyVer to $Component@$subName, but DELETE of the legacy umbrella was refused (HTTP 403). It's now empty; delete it manually or re-run with PORTFOLIO_MANAGEMENT."
+            }
+            else {
+                Write-Information "  $Component@$legacyVer (umbrella, $moved children) -> $Component@$subName" -InformationAction Continue
+            }
+        }
+        else {
+            # BOM upload itself - re-parent under the new sub-channel umbrella.
+            # Keep version as `ci/<X>` to avoid colliding with any existing
+            # `<Component>@<X>` project (e.g. the umbrella we just created).
             $resp = & $invokeRest `
                 -ServerUrl $ServerUrl -ApiKey $ApiKey `
                 -Method Patch `
-                -Path "/api/v1/project/$($child.uuid)" `
-                -Body @{ parent = @{ uuid = $subChannelUuid } } `
-                -ExpectStatus 200, 304, 403, 404
+                -Path "/api/v1/project/$($legacy.uuid)" `
+                -Body @{ parent = @{ uuid = $newSubUuid } } `
+                -ExpectStatus 200, 304, 403
 
             if ($resp.StatusCode -eq 403) {
-                $msg = "Dependency-Track refused project PATCH with HTTP 403 while re-parenting " +
-                       "$($child.name)@$($child.version) under $Component@$SubChannel. " +
-                       "The supplied API key lacks PORTFOLIO_MANAGEMENT, required by " +
-                       "PATCH /api/v1/project/{uuid}. Aborting migration before more children are moved."
-                Write-Information "::error::$msg" -InformationAction Continue
-                throw $msg
+                throw "Dependency-Track refused PATCH with HTTP 403 while re-parenting $Component@$legacyVer under $Component@$subName. The supplied API key lacks PORTFOLIO_MANAGEMENT. Aborting migration."
             }
-            if ($resp.StatusCode -eq 404) { continue }
-            $moved++
-        }
-
-        # Delete the now-empty legacy umbrella. 403 is non-fatal here (re-parenting
-        # already succeeded); 404 just means it's already gone (race).
-        $del = & $invokeRest `
-            -ServerUrl $ServerUrl -ApiKey $ApiKey `
-            -Method Delete `
-            -Path "/api/v1/project/$($legacy.uuid)" `
-            -ExpectStatus 200, 202, 204, 403, 404
-
-        if ($del.StatusCode -eq 403) {
-            Write-Warning "Re-parented $moved child(ren) from $Component@$legacyVersion to $Component@$SubChannel, but DELETE of the legacy umbrella was refused (HTTP 403). The umbrella is now empty; delete it manually or grant PORTFOLIO_MANAGEMENT and re-run the bootstrap."
-        }
-        else {
-            Write-Information "Migrated $moved child(ren) from $Component@$legacyVersion to $Component@$SubChannel; legacy umbrella deleted" -InformationAction Continue
+            Write-Information "  $Component@$legacyVer ($($legacy.classifier), BOM upload) re-parented under $Component@$subName" -InformationAction Continue
         }
     }
 }
