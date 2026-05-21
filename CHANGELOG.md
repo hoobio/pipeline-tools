@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/hoobio/pipeline-tools/compare/v1.6.0...v2.0.0) (2026-05-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* consolidate SBOM build behind Build-CycloneDxSbom.ps1 and enforce hierarchy ([#21](https://github.com/hoobio/pipeline-tools/issues/21))
+
+### Features
+
+* consolidate SBOM build behind Build-CycloneDxSbom.ps1 and enforce hierarchy ([#21](https://github.com/hoobio/pipeline-tools/issues/21)) ([c2c1996](https://github.com/hoobio/pipeline-tools/commit/c2c1996f6c656ed22fa6cefae4cc864bda4dcc15))
+
 ## [1.6.0](https://github.com/hoobio/pipeline-tools/compare/v1.5.0...v1.6.0) (2026-05-03)
 
 
