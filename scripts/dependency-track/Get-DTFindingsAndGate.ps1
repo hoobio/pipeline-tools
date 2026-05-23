@@ -110,7 +110,7 @@ $lookup = & $invokeRest `
 if ($lookup.StatusCode -eq 404) {
     throw "Dependency-Track has no project '$ProjectName@$ProjectVersion'. Upload the BOM before running the gate."
 }
-$projectUuid = $lookup.Content.uuid
+$projectUuid = $lookup.Body.uuid
 if (-not $projectUuid) {
     throw "Lookup returned no uuid for '$ProjectName@$ProjectVersion'."
 }
@@ -121,7 +121,7 @@ $findResp = & $invokeRest `
     -ApiKey $ApiKey `
     -Method Get `
     -Path "/api/v1/finding/project/$projectUuid"
-$findings = @($findResp.Content)
+$findings = @($findResp.Body)
 
 $severityOrder = @('critical', 'high', 'medium', 'low', 'info', 'unassigned')
 $counts = [ordered]@{}
