@@ -37,6 +37,11 @@ inputs:
     description: |
       Path the application scanner reads. Directory for python/node, .sln /
       .slnx / .csproj for dotnet. Ignored when app-language is none.
+
+      For `node`: when the directory contains a `bun.lock` (text) or
+      `bun.lockb` (binary), the scan auto-switches to anchore/syft because
+      cyclonedx-npm doesn't read bun lockfiles. package-lock / yarn.lock /
+      pnpm-lock keep going through cyclonedx-npm.
     required: false
     default: ''
 

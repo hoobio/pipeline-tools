@@ -53,7 +53,10 @@ Path the application scanner reads from. Semantics differ by language:
 
     python   Directory containing pyproject.toml + a recognised lockfile
              (uv.lock, poetry.lock, Pipfile.lock, or requirements.txt).
-    node     Directory containing package.json + lockfile.
+    node     Directory containing package.json + lockfile. When the
+             lockfile is bun.lock (text) or bun.lockb (binary), the directory
+             is scanned via Syft so the lockfile is read accurately. Otherwise
+             cyclonedx-npm reads package-lock.json / yarn.lock / pnpm-lock.
     dotnet   Path to a .sln, .slnx, or .csproj file.
 
 .PARAMETER PythonImage
@@ -188,6 +191,36 @@ function Invoke-SyftScan {
     }
 }
 
+function Invoke-SyftDirScan {
+    param(
+        [Parameter(Mandatory)] [string]$DirPath,
+        [Parameter(Mandatory)] [string]$OutputPath,
+        [Parameter(Mandatory)] [string]$SyftVersion
+    )
+    Assert-DockerAvailable
+
+    $absDir    = (Resolve-Path -LiteralPath $DirPath).Path
+    $absOutput = [System.IO.Path]::GetFullPath($OutputPath)
+    $outDir    = Split-Path -Path $absOutput -Parent
+    $outFile   = Split-Path -Path $absOutput -Leaf
+
+    Write-Information "Generating directory BOM for $absDir via anchore/syft:$SyftVersion" -InformationAction Continue
+
+    & docker run --rm `
+        -v "${absDir}:/work:ro" `
+        -v "${outDir}:/out" `
+        "anchore/syft:$SyftVersion" `
+        'dir:/work' `
+        -o "cyclonedx-json=/out/$outFile"
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Syft directory scan failed for '$absDir' (exit $LASTEXITCODE)"
+    }
+    if (-not (Test-Path -LiteralPath $absOutput)) {
+        throw "Syft did not produce expected output at '$absOutput'"
+    }
+}
+
 function Invoke-PythonScan {
     param(
         [Parameter(Mandatory)] [string]$ManifestPath,
@@ -250,7 +283,8 @@ function Invoke-NodeScan {
         [Parameter(Mandatory)] [string]$ManifestPath,
         [Parameter(Mandatory)] [string]$OutputPath,
         [Parameter(Mandatory)] [string]$NodeImage,
-        [Parameter(Mandatory)] [string]$CycloneDxNpmVersion
+        [Parameter(Mandatory)] [string]$CycloneDxNpmVersion,
+        [Parameter(Mandatory)] [string]$SyftVersion
     )
     Assert-DockerAvailable
 
@@ -259,6 +293,18 @@ function Invoke-NodeScan {
     }
 
     $absManifest = (Resolve-Path -LiteralPath $ManifestPath).Path
+
+    # cyclonedx-npm doesn't understand bun's lockfile (neither the binary
+    # bun.lockb nor the JSON bun.lock format introduced in bun 1.2). Syft
+    # does, so route bun projects through a directory scan when detected.
+    $hasBunLockfile = (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lock')) -or
+                      (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lockb'))
+    if ($hasBunLockfile) {
+        Write-Information "Detected bun lockfile in $absManifest; scanning via anchore/syft:$SyftVersion" -InformationAction Continue
+        Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion
+        return
+    }
+
     $absOutput   = [System.IO.Path]::GetFullPath($OutputPath)
     $outDir      = Split-Path -Path $absOutput -Parent
     $outFile     = Split-Path -Path $absOutput -Leaf
@@ -433,7 +479,8 @@ try {
             }
             'node' {
                 Invoke-NodeScan -ManifestPath $AppManifestPath -OutputPath $appBomPath `
-                    -NodeImage $NodeImage -CycloneDxNpmVersion $CycloneDxNpmVersion
+                    -NodeImage $NodeImage -CycloneDxNpmVersion $CycloneDxNpmVersion `
+                    -SyftVersion $SyftVersion
             }
             'dotnet' {
                 Invoke-DotnetScan -ManifestPath $AppManifestPath -OutputPath $appBomPath `
