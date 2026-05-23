@@ -282,22 +282,47 @@ function Invoke-GithubActionsScan {
     # Scan a directory of GitHub Actions workflow YAML (typically
     # .github/workflows) for `uses:` refs. Only the github-actions catalogers
     # run so we don't pull in npm packages / files from the same tree.
+    #
+    # syft's github-actions-usage-cataloger only matches files whose path
+    # contains `.github/workflows/`. When the caller hands us
+    # `<repo>/.github/workflows` directly, we have to remount it under that
+    # exact subpath inside the syft container or the cataloger silently
+    # produces an empty BOM. Mounting at `/work/.github/workflows` and
+    # scanning `dir:/work` keeps the heuristic happy.
     param(
         [Parameter(Mandatory)] [string]$DirPath,
         [Parameter(Mandatory)] [string]$OutputPath,
         [Parameter(Mandatory)] [string]$SyftVersion
     )
+    Assert-DockerAvailable
 
     if (-not (Test-Path -LiteralPath $DirPath -PathType Container)) {
         Write-Warning "ScanGithubActionsPath '$DirPath' is not a directory; skipping GitHub Actions scan."
         return $false
     }
 
-    Invoke-SyftDirScan `
-        -DirPath $DirPath `
-        -OutputPath $OutputPath `
-        -SyftVersion $SyftVersion `
-        -Catalogers 'github-actions-usage-cataloger,github-action-workflow-usage-cataloger'
+    $absDir    = (Resolve-Path -LiteralPath $DirPath).Path
+    $absOutput = [System.IO.Path]::GetFullPath($OutputPath)
+    $outDir    = Split-Path -Path $absOutput -Parent
+    $outFile   = Split-Path -Path $absOutput -Leaf
+
+    Write-Information "Generating GitHub Actions BOM from $absDir via anchore/syft:$SyftVersion (mounted at .github/workflows so the cataloger matches)" -InformationAction Continue
+
+    & docker run --rm `
+        -v "${absDir}:/work/.github/workflows:ro" `
+        -v "${outDir}:/out" `
+        "anchore/syft:$SyftVersion" `
+        'dir:/work' `
+        --override-default-catalogers 'github-actions-usage-cataloger,github-action-workflow-usage-cataloger' `
+        -o "cyclonedx-json=/out/$outFile"
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Syft GitHub Actions scan failed for '$absDir' (exit $LASTEXITCODE)"
+    }
+    if (-not (Test-Path -LiteralPath $absOutput)) {
+        throw "Syft did not produce expected output at '$absOutput'"
+    }
+    Repair-OutputPermission -Path $absOutput
     return $true
 }
 
