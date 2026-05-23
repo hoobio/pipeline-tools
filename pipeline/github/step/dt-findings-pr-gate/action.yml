@@ -51,6 +51,20 @@ inputs:
     description: HTML-comment marker used to identify the prior bot comment for upsert.
     required: false
     default: '<!-- dt-pr-gate -->'
+  html-output-path:
+    description: |
+      Optional path to write a self-contained HTML findings report. Upload as
+      a workflow artifact afterwards (e.g. via actions/upload-artifact) so the
+      PR comment's "Full HTML report" link resolves to it.
+    required: false
+    default: ''
+  artifact-run-url:
+    description: |
+      URL surfaced in the PR comment as the destination of the "Full HTML
+      report" link. Defaults to the current workflow run page; override only
+      if the artifact lives elsewhere.
+    required: false
+    default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 outputs:
   total-count:
@@ -87,6 +101,8 @@ runs:
         DT_REPO:          ${{ inputs.repo }}
         DT_GITHUB_TOKEN:  ${{ inputs.github-token }}
         DT_COMMENT_MARK:  ${{ inputs.comment-marker }}
+        DT_HTML_OUT:      ${{ inputs.html-output-path }}
+        DT_ARTIFACT_URL:  ${{ inputs.artifact-run-url }}
       run: |
         $params = @{
           ServerUrl       = $env:DT_SERVER_URL
@@ -96,8 +112,10 @@ runs:
           FailOnSeverity  = $env:DT_FAIL_ON
           CommentMarker   = $env:DT_COMMENT_MARK
         }
-        if ($env:DT_PR_NUMBER)    { $params.PrNumber    = $env:DT_PR_NUMBER }
-        if ($env:DT_REPO)         { $params.RepoName    = $env:DT_REPO }
-        if ($env:DT_GITHUB_TOKEN) { $params.GithubToken = $env:DT_GITHUB_TOKEN }
+        if ($env:DT_PR_NUMBER)    { $params.PrNumber        = $env:DT_PR_NUMBER }
+        if ($env:DT_REPO)         { $params.RepoName        = $env:DT_REPO }
+        if ($env:DT_GITHUB_TOKEN) { $params.GithubToken     = $env:DT_GITHUB_TOKEN }
+        if ($env:DT_HTML_OUT)     { $params.OutputHtmlPath  = $env:DT_HTML_OUT
+                                    $params.ArtifactRunUrl  = $env:DT_ARTIFACT_URL }
 
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Get-DTFindingsAndGate.ps1" @params

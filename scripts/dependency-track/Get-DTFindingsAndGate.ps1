@@ -48,6 +48,15 @@ GitHub token with pull-requests:write. Required when PrNumber is set.
 .PARAMETER CommentMarker
 HTML-comment marker used to find the prior bot comment for upsert.
 Default: '<!-- dt-pr-gate -->'.
+
+.PARAMETER OutputHtmlPath
+Optional path to write a self-contained HTML findings report to. Empty to
+skip. When set, the report is rendered with embedded CSS (no external assets)
+so a single file is sufficient for distribution as a workflow artifact.
+
+.PARAMETER ArtifactRunUrl
+Optional URL to surface in the PR comment as "Download full report". Usually
+the workflow run page that will hold the uploaded HTML artifact.
 #>
 [CmdletBinding()]
 param(
@@ -59,7 +68,9 @@ param(
     [Parameter(Mandatory = $false)] [string]$PrNumber,
     [Parameter(Mandatory = $false)] [string]$RepoName,
     [Parameter(Mandatory = $false)] [string]$GithubToken,
-    [Parameter(Mandatory = $false)] [string]$CommentMarker = '<!-- dt-pr-gate -->'
+    [Parameter(Mandatory = $false)] [string]$CommentMarker = '<!-- dt-pr-gate -->',
+    [Parameter(Mandatory = $false)] [string]$OutputHtmlPath,
+    [Parameter(Mandatory = $false)] [string]$ArtifactRunUrl
 )
 
 $ErrorActionPreference = 'Stop'
@@ -160,7 +171,157 @@ else {
 $summaryLines += ''
 $summaryLines += "_Gate: fails on **$FailOnSeverity** or worse._"
 
+if ($ArtifactRunUrl) {
+    $summaryLines += ''
+    $summaryLines += ":paperclip: **Full HTML report:** see the ``dt-findings`` artifact in [this workflow run]($ArtifactRunUrl)."
+}
+
 $summary = ($summaryLines -join "`n")
+
+# ---- HTML report (optional) ----
+if ($OutputHtmlPath) {
+    $htmlPath = [System.IO.Path]::GetFullPath($OutputHtmlPath)
+    $htmlDir  = Split-Path -Path $htmlPath -Parent
+    if ($htmlDir -and -not (Test-Path -LiteralPath $htmlDir)) {
+        New-Item -Path $htmlDir -ItemType Directory -Force | Out-Null
+    }
+
+    # Severity → CSS class.
+    function Get-SevClass([string]$s) { switch ($s) {
+        'critical' { 'sev-critical' }
+        'high'     { 'sev-high' }
+        'medium'   { 'sev-medium' }
+        'low'      { 'sev-low' }
+        'info'     { 'sev-info' }
+        default    { 'sev-unassigned' }
+    }}
+    function Escape-Html([string]$s) {
+        if ($null -eq $s) { return '' }
+        return ($s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;')
+    }
+
+    $statusClass = if ($gateTripped) { 'status-fail' } elseif ($totalCount -gt 0) { 'status-warn' } else { 'status-pass' }
+    $statusLabel = if ($gateTripped) { "GATE TRIPPED ($FailOnSeverity+)" } elseif ($totalCount -gt 0) { 'FINDINGS PRESENT' } else { 'CLEAN' }
+    $generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss \U\T\C')
+
+    $countCards = foreach ($s in $severityOrder) {
+        if ($counts[$s] -gt 0) {
+            $cls = Get-SevClass $s
+            "<div class='count-card $cls'><span class='count-num'>$($counts[$s])</span><span class='count-label'>$(Escape-Html $s)</span></div>"
+        }
+    }
+
+    $tableRows = foreach ($f in $sortedFindings) {
+        $sev    = ($f.vulnerability.severity ?? 'unknown').ToString().ToLowerInvariant()
+        $sevCls = Get-SevClass $sev
+        $vulnId = Escape-Html ($f.vulnerability.vulnId ?? 'UNKNOWN')
+        $source = Escape-Html ($f.vulnerability.source ?? '')
+        $comp   = Escape-Html "$($f.component.name)@$($f.component.version)"
+        $title  = Escape-Html ((($f.vulnerability.title ?? '') -replace '\s+', ' ').Trim())
+        $url    = $f.vulnerability.url
+        $idCell = if ($url) { "<a href='$(Escape-Html $url)' target='_blank' rel='noreferrer'>$vulnId</a>" } else { $vulnId }
+        $cweCell = ''
+        if ($f.vulnerability.cweId) { $cweCell = "<span class='cwe'>CWE-$(Escape-Html ([string]$f.vulnerability.cweId))</span>" }
+        @"
+<tr>
+  <td class='sev-cell $sevCls'>$([string]$sev)</td>
+  <td><code>$idCell</code> <span class='source'>$source</span> $cweCell</td>
+  <td><code>$comp</code></td>
+  <td>$title</td>
+</tr>
+"@
+    }
+
+    $tableHtml = if ($totalCount -eq 0) {
+        "<div class='empty'>:tada: No findings on this project version.</div>"
+    } else {
+        @"
+<table>
+  <thead>
+    <tr><th>Severity</th><th>Vulnerability</th><th>Component</th><th>Title</th></tr>
+  </thead>
+  <tbody>
+$($tableRows -join "`n")
+  </tbody>
+</table>
+"@
+    }
+
+    $html = @"
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'>
+  <title>Dependency-Track findings - $(Escape-Html $ProjectName)@$(Escape-Html $ProjectVersion)</title>
+  <style>
+    :root {
+      --bg: #0d1117; --bg-2: #161b22; --bg-3: #21262d;
+      --border: #30363d; --text: #c9d1d9; --text-dim: #8b949e; --text-bright: #f0f6fc;
+      --critical: #f85149; --high: #f39c12; --medium: #f1c40f; --low: #95e6cb; --info: #73d0ff; --unassigned: #6e7681;
+      --pass: #56d364; --fail: #f85149; --warn: #f39c12;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+    header { max-width: 1100px; margin: 0 auto 2rem; }
+    h1 { color: var(--text-bright); font-size: 1.75rem; margin: 0 0 0.5rem; font-weight: 600; }
+    .meta { color: var(--text-dim); font-size: 0.875rem; }
+    .meta code { background: var(--bg-2); padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.85rem; color: var(--text); }
+    .status { display: inline-block; padding: 0.25rem 0.625rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; margin-left: 0.5rem; }
+    .status-pass { background: rgba(86, 211, 100, 0.15); color: var(--pass); }
+    .status-warn { background: rgba(243, 156, 18, 0.15); color: var(--warn); }
+    .status-fail { background: rgba(248, 81, 73, 0.15); color: var(--fail); }
+    main { max-width: 1100px; margin: 0 auto; }
+    .counts { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+    .count-card { background: var(--bg-2); border: 1px solid var(--border); border-radius: 0.5rem; padding: 0.75rem 1rem; min-width: 100px; }
+    .count-num { display: block; font-size: 1.5rem; font-weight: 600; color: var(--text-bright); }
+    .count-label { display: block; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.7rem; color: var(--text-dim); margin-top: 0.125rem; }
+    .count-card.sev-critical .count-num   { color: var(--critical); }
+    .count-card.sev-high     .count-num   { color: var(--high); }
+    .count-card.sev-medium   .count-num   { color: var(--medium); }
+    .count-card.sev-low      .count-num   { color: var(--low); }
+    .count-card.sev-info     .count-num   { color: var(--info); }
+    .count-card.sev-unassigned .count-num { color: var(--unassigned); }
+    table { width: 100%; border-collapse: collapse; background: var(--bg-2); border: 1px solid var(--border); border-radius: 0.5rem; overflow: hidden; }
+    thead th { text-align: left; padding: 0.75rem 1rem; background: var(--bg-3); color: var(--text-dim); font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600; border-bottom: 1px solid var(--border); }
+    tbody td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--bg-3); vertical-align: top; font-size: 0.875rem; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: var(--bg-3); }
+    code { font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 0.825rem; background: var(--bg-3); padding: 0.125rem 0.375rem; border-radius: 0.25rem; color: var(--text); }
+    a { color: var(--info); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .sev-cell { font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
+    .sev-cell.sev-critical { color: var(--critical); }
+    .sev-cell.sev-high     { color: var(--high); }
+    .sev-cell.sev-medium   { color: var(--medium); }
+    .sev-cell.sev-low      { color: var(--low); }
+    .sev-cell.sev-info     { color: var(--info); }
+    .sev-cell.sev-unassigned { color: var(--unassigned); }
+    .source { color: var(--text-dim); font-size: 0.75rem; margin-left: 0.375rem; }
+    .cwe { color: var(--text-dim); font-size: 0.75rem; margin-left: 0.5rem; }
+    .empty { text-align: center; padding: 3rem 1rem; background: var(--bg-2); border: 1px solid var(--border); border-radius: 0.5rem; color: var(--low); font-size: 1.125rem; }
+    footer { max-width: 1100px; margin: 2rem auto 0; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.75rem; text-align: center; }
+    footer code { background: var(--bg-2); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Dependency-Track findings<span class='status $statusClass'>$statusLabel</span></h1>
+    <div class='meta'>Project: <code>$(Escape-Html $ProjectName)@$(Escape-Html $ProjectVersion)</code> &middot; Generated: $generatedAt &middot; Gate threshold: <code>$(Escape-Html $FailOnSeverity)</code></div>
+  </header>
+  <main>
+    <section class='counts'>
+$([string]::Join("`n", $countCards))
+    </section>
+    $tableHtml
+  </main>
+  <footer>Generated by <code>dt-findings-pr-gate</code> from hoobio/pipeline-tools.</footer>
+</body>
+</html>
+"@
+
+    Set-Content -LiteralPath $htmlPath -Value $html -Encoding UTF8
+    Write-Information "Wrote HTML report to $htmlPath" -InformationAction Continue
+}
 
 # Write the step summary so the run page surfaces it.
 if ($env:GITHUB_STEP_SUMMARY) {
