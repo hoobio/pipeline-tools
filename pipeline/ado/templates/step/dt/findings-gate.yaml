@@ -83,6 +83,7 @@ steps:
         ProjectName       = $env:DT_PROJECT_NAME
         ProjectVersion    = $env:DT_PROJECT_VER
         FailOnSeverity    = $env:DT_FAIL_ON
+        GateMode          = $env:DT_GATE_MODE
         CommentMarker     = $env:DT_COMMENT_MARK
         OutputHtmlPath    = $env:DT_HTML_OUT
         OutputSummaryPath = $summaryFile
@@ -116,6 +117,7 @@ steps:
       DT_PROJECT_NAME:  ${{ parameters.projectName }}
       DT_PROJECT_VER:   ${{ parameters.projectVersion }}
       DT_FAIL_ON:       ${{ parameters.failOnSeverity }}
+      DT_GATE_MODE:     ${{ parameters.gateMode }}
       DT_COMMENT_MARK:  ${{ parameters.commentMarker }}
       DT_HTML_OUT:      ${{ parameters.htmlOutputPath }}
       DT_COMMENT_ON_PR: ${{ parameters.commentOnPr }}

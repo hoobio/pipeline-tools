@@ -27,10 +27,18 @@ inputs:
     required: true
   fail-on-severity:
     description: |
-      Lowest severity that fails the step. One of: critical, high, medium,
-      low, info, none. Use 'none' to never fail (informational only).
+      Lowest severity that triggers the gate. One of: critical, high, medium,
+      low, info, none. 'none' disables the gate.
     required: false
     default: critical
+  gate-mode:
+    description: |
+      How the gate enforces when tripped. One of:
+        error   - exit non-zero, failing the step (default).
+        warning - exit 0 but emit a warning annotation.
+        off     - report only.
+    required: false
+    default: error
   pr-number:
     description: GitHub PR number to upsert a comment on. Empty for no comment.
     required: false
@@ -105,6 +113,7 @@ runs:
         DT_PROJECT_NAME:  ${{ inputs.project-name }}
         DT_PROJECT_VER:   ${{ inputs.project-version }}
         DT_FAIL_ON:       ${{ inputs.fail-on-severity }}
+        DT_GATE_MODE:     ${{ inputs.gate-mode }}
         DT_PR_NUMBER:     ${{ inputs.pr-number }}
         DT_REPO:          ${{ inputs.repo }}
         DT_GITHUB_TOKEN:  ${{ inputs.github-token }}
@@ -119,6 +128,7 @@ runs:
           ProjectName     = $env:DT_PROJECT_NAME
           ProjectVersion  = $env:DT_PROJECT_VER
           FailOnSeverity  = $env:DT_FAIL_ON
+          GateMode        = $env:DT_GATE_MODE
           CommentMarker   = $env:DT_COMMENT_MARK
         }
         if ($env:DT_PR_NUMBER)    { $params.PrNumber        = $env:DT_PR_NUMBER }

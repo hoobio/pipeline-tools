@@ -32,9 +32,17 @@ DT project name (typically the `component` value passed to upload).
 DT project version (the `project-version` value passed to upload).
 
 .PARAMETER FailOnSeverity
-Lowest severity that triggers a non-zero exit. One of:
+Lowest severity that triggers the gate. One of:
 critical, high, medium, low, info, none. 'none' disables the gate.
 Default: critical.
+
+.PARAMETER GateMode
+How the gate enforces when tripped. One of:
+  error   - exit non-zero, failing the step (default).
+  warning - exit 0 but emit a warning annotation; on ADO also issue
+            task.complete result=SucceededWithIssues so the build shows
+            partiallySucceeded.
+  off     - never fail or warn, report only.
 
 .PARAMETER PrNumber
 GitHub PR number to comment on. Omit for non-PR contexts.
@@ -81,6 +89,7 @@ param(
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$ProjectName,
     [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [string]$ProjectVersion,
     [Parameter(Mandatory = $false)] [ValidateSet('critical', 'high', 'medium', 'low', 'info', 'none')] [string]$FailOnSeverity = 'critical',
+    [Parameter(Mandatory = $false)] [ValidateSet('error', 'warning', 'off')] [string]$GateMode = 'error',
     [Parameter(Mandatory = $false)] [string]$PrNumber,
     [Parameter(Mandatory = $false)] [string]$RepoName,
     [Parameter(Mandatory = $false)] [string]$GithubToken,
@@ -576,6 +585,22 @@ if ($env:GITHUB_OUTPUT) {
 
 if ($gateTripped) {
     $msg = "Dependency-Track gate tripped: findings at or above '$FailOnSeverity' present."
-    Write-Information "::error::$msg" -InformationAction Continue
-    exit 1
+    switch ($GateMode) {
+        'error' {
+            Write-Information "::error::$msg" -InformationAction Continue
+            Write-Host "##vso[task.logissue type=error]$msg"
+            exit 1
+        }
+        'warning' {
+            Write-Information "::warning::$msg" -InformationAction Continue
+            Write-Host "##vso[task.logissue type=warning]$msg"
+            # Bubbles up to the ADO build result as partiallySucceeded.
+            Write-Host "##vso[task.complete result=SucceededWithIssues;]"
+            exit 0
+        }
+        'off' {
+            Write-Information $msg -InformationAction Continue
+            exit 0
+        }
+    }
 }
