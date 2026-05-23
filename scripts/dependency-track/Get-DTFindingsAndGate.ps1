@@ -134,10 +134,11 @@ foreach ($f in $findings) {
 
 # Compose Markdown.
 $totalCount = ($counts.Values | Measure-Object -Sum).Sum
-$gateRank   = @{ critical = 0; high = 1; medium = 2; low = 3; info = 4; none = 99 }[$FailOnSeverity]
+$gateRanks  = @{ critical = 0; high = 1; medium = 2; low = 3; info = 4; unassigned = 5; none = 99 }
+$gateThreshold = $gateRanks[$FailOnSeverity]
 $gateTripped = $false
 for ($i = 0; $i -lt $severityOrder.Count; $i++) {
-    if ($i -le $gateRank -and $counts[$severityOrder[$i]] -gt 0) { $gateTripped = $true; break }
+    if ($i -le $gateThreshold -and $counts[$severityOrder[$i]] -gt 0) { $gateTripped = $true; break }
 }
 
 $icon = if ($gateTripped) { ':x:' } elseif ($totalCount -gt 0) { ':warning:' } else { ':white_check_mark:' }
@@ -168,7 +169,10 @@ else {
     $rows = @('| Severity | CVE / GHSA | Component | Title |',
               '|---|---|---|---|')
     $sortedFindings = $findings | Sort-Object `
-        @{ Expression = { $gateRank.Keys.IndexOf( ($_.vulnerability.severity ?? '').ToLowerInvariant() ) }; Ascending = $true },
+        @{ Expression = {
+            $sev = ($_.vulnerability.severity ?? 'unassigned').ToString().ToLowerInvariant()
+            if ($gateRanks.ContainsKey($sev)) { $gateRanks[$sev] } else { 99 }
+        }; Ascending = $true },
         @{ Expression = { $_.vulnerability.vulnId }; Ascending = $true }
     $rendered = 0
     foreach ($f in $sortedFindings) {
