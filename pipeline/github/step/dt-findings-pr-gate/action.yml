@@ -38,9 +38,10 @@ inputs:
   repo:
     description: |
       GitHub repository in <owner>/<repo> form. Required when pr-number is
-      set. Defaults to the current repository.
+      set. Composite-action input defaults can't read the github.* context,
+      so callers must pass this explicitly (e.g. `${{ github.repository }}`).
     required: false
-    default: ${{ github.repository }}
+    default: ''
   github-token:
     description: |
       GitHub token with pull-requests:write. Required when pr-number is set.
@@ -61,10 +62,11 @@ inputs:
   artifact-run-url:
     description: |
       URL surfaced in the PR comment as the destination of the "Full HTML
-      report" link. Defaults to the current workflow run page; override only
-      if the artifact lives elsewhere.
+      report" link. Callers should pass
+      `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+      when uploading the HTML as an artifact on the current run.
     required: false
-    default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    default: ''
 
 outputs:
   total-count:
