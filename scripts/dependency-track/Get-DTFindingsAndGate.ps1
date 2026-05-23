@@ -499,25 +499,43 @@ if ($OutputSummaryPath) {
     Set-Content -LiteralPath $OutputSummaryPath -Value $summary -Encoding UTF8
 }
 
-# Optionally upsert a PR comment.
+# Optionally upsert a PR comment via the gh CLI (handles auth automatically
+# and is pre-installed on GitHub Actions runners). Avoids the manual Bearer
+# header where token whitespace / scope quirks have caused 401 Bad credentials.
 if ($PrNumber -and $RepoName -and $GithubToken) {
-    $body = "$summary`n`n$CommentMarker"
-    $headers = @{
-        Authorization = "Bearer $GithubToken"
-        Accept        = 'application/vnd.github+json'
-    }
-    $listUri  = "https://api.github.com/repos/$RepoName/issues/$PrNumber/comments?per_page=100"
-    $comments = Invoke-RestMethod -Uri $listUri -Headers $headers -Method Get
-    $existing = @($comments | Where-Object { $_.body -like "*$CommentMarker*" })[0]
-    if ($existing) {
-        $patchUri = "https://api.github.com/repos/$RepoName/issues/comments/$($existing.id)"
-        Invoke-RestMethod -Uri $patchUri -Headers $headers -Method Patch -Body (@{ body = $body } | ConvertTo-Json -Compress) -ContentType 'application/json' | Out-Null
-        Write-Information "Updated existing PR comment $($existing.id)" -InformationAction Continue
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        Write-Warning "gh CLI not on PATH; skipping PR comment upsert."
     }
     else {
-        $postUri = "https://api.github.com/repos/$RepoName/issues/$PrNumber/comments"
-        Invoke-RestMethod -Uri $postUri -Headers $headers -Method Post -Body (@{ body = $body } | ConvertTo-Json -Compress) -ContentType 'application/json' | Out-Null
-        Write-Information "Posted new PR comment" -InformationAction Continue
+        $env:GH_TOKEN = $GithubToken.Trim()
+        $body = "$summary`n`n$CommentMarker"
+        $bodyFile = Join-Path ([System.IO.Path]::GetTempPath()) "dt-pr-gate-body-$([guid]::NewGuid().ToString('N')).md"
+        Set-Content -LiteralPath $bodyFile -Value $body -Encoding UTF8
+
+        $existingId = & gh api --paginate "repos/$RepoName/issues/$PrNumber/comments" `
+            --jq ".[] | select(.body | contains(`"$CommentMarker`")) | .id" 2>$null |
+            Select-Object -First 1
+
+        if ($existingId) {
+            & gh api --method PATCH "repos/$RepoName/issues/comments/$existingId" -F "body=@$bodyFile" | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Information "Updated existing PR comment $existingId" -InformationAction Continue
+            }
+            else {
+                Write-Warning "gh api PATCH failed (exit $LASTEXITCODE)"
+            }
+        }
+        else {
+            & gh api --method POST "repos/$RepoName/issues/$PrNumber/comments" -F "body=@$bodyFile" | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Information 'Posted new PR comment' -InformationAction Continue
+            }
+            else {
+                Write-Warning "gh api POST failed (exit $LASTEXITCODE)"
+            }
+        }
+
+        Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue
     }
 }
 elseif ($PrNumber -or $RepoName -or $GithubToken) {
