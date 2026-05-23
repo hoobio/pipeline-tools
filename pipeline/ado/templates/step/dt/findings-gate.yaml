@@ -111,17 +111,16 @@ steps:
   # in-build report viewer. The full HTML stays as a downloadable artifact.
   - pwsh: |
       $summaryPath = Join-Path $env:AGENT_TEMPDIRECTORY 'dt-findings-summary.md'
-      $html = Get-Content -LiteralPath $env:DT_HTML_OUT -Raw -ErrorAction SilentlyContinue
       $artifactUrl = "$($env:SYSTEM_COLLECTIONURI.TrimEnd('/'))/$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
-      $md = @"
-## Dependency-Track findings
-
-**Project:** ``$($env:DT_PROJECT_NAME)@$($env:DT_PROJECT_VER)``
-**Gate:** fails on ``$($env:DT_FAIL_ON)`` or worse
-
-The full HTML report is published as the ``$($env:DT_HTML_ARTIFACT)`` pipeline artifact ([open this run]($artifactUrl)).
-"@
-      Set-Content -LiteralPath $summaryPath -Value $md -Encoding UTF8
+      $lines = @(
+        '## Dependency-Track findings',
+        '',
+        "**Project:** ``$($env:DT_PROJECT_NAME)@$($env:DT_PROJECT_VER)``",
+        "**Gate:** fails on ``$($env:DT_FAIL_ON)`` or worse",
+        '',
+        "The full HTML report is published as the ``$($env:DT_HTML_ARTIFACT)`` pipeline artifact ([open this run]($artifactUrl))."
+      )
+      Set-Content -LiteralPath $summaryPath -Value ($lines -join "`n") -Encoding UTF8
       Write-Host "##vso[task.uploadsummary]$summaryPath"
     env:
       DT_HTML_OUT:      ${{ parameters.htmlOutputPath }}
