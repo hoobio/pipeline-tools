@@ -509,6 +509,19 @@ function Invoke-CycloneDxMerge {
     Assert-DockerAvailable
 
     Write-Information "Merging $($Inputs.Count) BOMs via $CliImage" -InformationAction Continue
+    # Surface each input's component count before merging - cyclonedx-cli's
+    # own log only prints "Contains N" for the first input, then "Total N"
+    # for the merged result, which makes per-input regressions invisible.
+    foreach ($i in $Inputs) {
+        try {
+            $bom = Get-Content -LiteralPath $i -Raw | ConvertFrom-Json
+            $count = if ($bom.components) { @($bom.components).Count } else { 0 }
+            Write-Information "  input '$([IO.Path]::GetFileName($i))': $count components" -InformationAction Continue
+        }
+        catch {
+            Write-Warning "  input '$i' failed to parse: $($_.Exception.Message)"
+        }
+    }
 
     $stagingDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ([guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
