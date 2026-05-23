@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 
 <#
 .SYNOPSIS
@@ -304,7 +304,7 @@ if ($OutputHtmlPath) {
         'info'     { 'sev-info' }
         default    { 'sev-unassigned' }
     }}
-    function Escape-Html([string]$s) {
+    function ConvertTo-HtmlSafe([string]$s) {
         if ($null -eq $s) { return '' }
         return ($s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '"', '&quot;')
     }
@@ -316,7 +316,7 @@ if ($OutputHtmlPath) {
     $countCards = @(foreach ($s in $severityOrder) {
         if ($counts[$s] -gt 0) {
             $cls = Get-SevClass $s
-            "<div class='count-card $cls'><span class='count-num'>$($counts[$s])</span><span class='count-label'>$(Escape-Html $s)</span></div>"
+            "<div class='count-card $cls'><span class='count-num'>$($counts[$s])</span><span class='count-label'>$(ConvertTo-HtmlSafe $s)</span></div>"
         }
     })
     if ($countCards.Count -eq 0) {
@@ -326,14 +326,14 @@ if ($OutputHtmlPath) {
     $tableRows = foreach ($f in $sortedFindings) {
         $sev    = ($f.vulnerability.severity ?? 'unknown').ToString().ToLowerInvariant()
         $sevCls = Get-SevClass $sev
-        $vulnId = Escape-Html ($f.vulnerability.vulnId ?? 'UNKNOWN')
-        $source = Escape-Html ($f.vulnerability.source ?? '')
-        $comp   = Escape-Html "$($f.component.name)@$($f.component.version)"
-        $title  = Escape-Html ((($f.vulnerability.title ?? '') -replace '\s+', ' ').Trim())
+        $vulnId = ConvertTo-HtmlSafe ($f.vulnerability.vulnId ?? 'UNKNOWN')
+        $source = ConvertTo-HtmlSafe ($f.vulnerability.source ?? '')
+        $comp   = ConvertTo-HtmlSafe "$($f.component.name)@$($f.component.version)"
+        $title  = ConvertTo-HtmlSafe ((($f.vulnerability.title ?? '') -replace '\s+', ' ').Trim())
         $url    = $f.vulnerability.url
-        $idCell = if ($url) { "<a href='$(Escape-Html $url)' target='_blank' rel='noreferrer'>$vulnId</a>" } else { $vulnId }
+        $idCell = if ($url) { "<a href='$(ConvertTo-HtmlSafe $url)' target='_blank' rel='noreferrer'>$vulnId</a>" } else { $vulnId }
         $cweCell = ''
-        if ($f.vulnerability.cweId) { $cweCell = "<span class='cwe'>CWE-$(Escape-Html ([string]$f.vulnerability.cweId))</span>" }
+        if ($f.vulnerability.cweId) { $cweCell = "<span class='cwe'>CWE-$(ConvertTo-HtmlSafe ([string]$f.vulnerability.cweId))</span>" }
         @"
 <tr>
   <td class='sev-cell $sevCls'>$([string]$sev)</td>
@@ -367,7 +367,7 @@ $($tableRows -join "`n")
         $countsByType = ''
         if ($componentBreakdown) {
             $rows = foreach ($g in $componentBreakdown) {
-                $typ = if ($g.Name) { Escape-Html $g.Name } else { '<em>unknown</em>' }
+                $typ = if ($g.Name) { ConvertTo-HtmlSafe $g.Name } else { '<em>unknown</em>' }
                 "<tr><td>$typ</td><td style='text-align:right'>$($g.Count)</td></tr>"
             }
             $countsByType = "<table class='component-counts'><thead><tr><th>Type</th><th style='text-align:right'>Count</th></tr></thead><tbody>$($rows -join '')</tbody></table>"
@@ -382,7 +382,7 @@ $($tableRows -join "`n")
                     elseif ($_.expression)   { $_.expression }
                 }) -join ', '
             }
-            "<tr><td><code>$(Escape-Html ($c.name ?? ''))</code></td><td><code>$(Escape-Html ($c.version ?? ''))</code></td><td>$(Escape-Html ($c.type ?? ''))</td><td>$(Escape-Html $licenses)</td></tr>"
+            "<tr><td><code>$(ConvertTo-HtmlSafe ($c.name ?? ''))</code></td><td><code>$(ConvertTo-HtmlSafe ($c.version ?? ''))</code></td><td>$(ConvertTo-HtmlSafe ($c.type ?? ''))</td><td>$(ConvertTo-HtmlSafe $licenses)</td></tr>"
         }
         $componentsHtml = @"
 <section class='components'>
@@ -406,7 +406,7 @@ $($compRows -join "`n")
 <html lang='en'>
 <head>
   <meta charset='utf-8'>
-  <title>Dependency-Track findings - $(Escape-Html $ProjectName)@$(Escape-Html $ProjectVersion)</title>
+  <title>Dependency-Track findings - $(ConvertTo-HtmlSafe $ProjectName)@$(ConvertTo-HtmlSafe $ProjectVersion)</title>
   <style>
     :root {
       --bg: #0d1117; --bg-2: #161b22; --bg-3: #21262d;
@@ -466,7 +466,7 @@ $($compRows -join "`n")
 <body>
   <header>
     <h1>Dependency-Track findings<span class='status $statusClass'>$statusLabel</span></h1>
-    <div class='meta'>Project: <code>$(Escape-Html $ProjectName)@$(Escape-Html $ProjectVersion)</code> &middot; Generated: $generatedAt &middot; Gate threshold: <code>$(Escape-Html $FailOnSeverity)</code></div>
+    <div class='meta'>Project: <code>$(ConvertTo-HtmlSafe $ProjectName)@$(ConvertTo-HtmlSafe $ProjectVersion)</code> &middot; Generated: $generatedAt &middot; Gate threshold: <code>$(ConvertTo-HtmlSafe $FailOnSeverity)</code></div>
   </header>
   <main>
     <section class='counts'>
@@ -606,14 +606,14 @@ if ($gateTripped) {
     switch ($GateMode) {
         'error' {
             Write-Information "::error::$msg" -InformationAction Continue
-            Write-Host "##vso[task.logissue type=error]$msg"
+            Write-Output "##vso[task.logissue type=error]$msg"
             exit 1
         }
         'warning' {
             Write-Information "::warning::$msg" -InformationAction Continue
-            Write-Host "##vso[task.logissue type=warning]$msg"
+            Write-Output "##vso[task.logissue type=warning]$msg"
             # Bubbles up to the ADO build result as partiallySucceeded.
-            Write-Host "##vso[task.complete result=SucceededWithIssues;]"
+            Write-Output "##vso[task.complete result=SucceededWithIssues;]"
             exit 0
         }
         'off' {
