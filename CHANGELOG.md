@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/hoobio/pipeline-tools/compare/v2.1.0...v2.2.0) (2026-05-23)
+
+
+### Features
+
+* bun lockfile SBOM support + DT findings PR gate (GH + ADO) ([#26](https://github.com/hoobio/pipeline-tools/issues/26)) ([f9e3a35](https://github.com/hoobio/pipeline-tools/commit/f9e3a35630796013c451b2191c9a429aa2c58ad0))
+
 ## [2.1.0](https://github.com/hoobio/pipeline-tools/compare/v2.0.0...v2.1.0) (2026-05-21)
 
 
