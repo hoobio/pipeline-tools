@@ -27,7 +27,7 @@ inputs:
   syft-version:
     description: Pinned anchore/syft image tag.
     required: false
-    default: v1.17.0
+    default: v1.40.1
 
   app-language:
     description: 'Application scanner. One of: none, python, node, dotnet.'

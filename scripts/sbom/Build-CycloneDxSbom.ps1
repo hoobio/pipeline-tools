@@ -111,7 +111,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$SyftVersion = 'v1.17.0',
+    [string]$SyftVersion = 'v1.40.1',
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('none', 'python', 'node', 'dotnet')]
