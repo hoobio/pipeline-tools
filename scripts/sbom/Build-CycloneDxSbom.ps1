@@ -251,13 +251,13 @@ pip install --no-cache-dir --quiet 'cyclonedx-bom==$CycloneDxPyVersion'
 if [ -f uv.lock ]; then
   pip install --no-cache-dir --quiet uv
   uv export --format requirements-txt --no-hashes --no-emit-project --quiet > /tmp/req.txt
-  cyclonedx-py requirements /tmp/req.txt --output-format JSON --outfile "/out/$outFile"
+  cyclonedx-py requirements /tmp/req.txt --output-format JSON --output-file "/out/$outFile"
 elif [ -f poetry.lock ]; then
-  cyclonedx-py poetry --output-format JSON --outfile "/out/$outFile"
+  cyclonedx-py poetry --output-format JSON --output-file "/out/$outFile"
 elif [ -f Pipfile.lock ]; then
-  cyclonedx-py pipenv --output-format JSON --outfile "/out/$outFile"
+  cyclonedx-py pipenv --output-format JSON --output-file "/out/$outFile"
 elif [ -f requirements.txt ]; then
-  cyclonedx-py requirements requirements.txt --output-format JSON --outfile "/out/$outFile"
+  cyclonedx-py requirements requirements.txt --output-format JSON --output-file "/out/$outFile"
 else
   echo "no supported Python lockfile in /work (looked for uv.lock, poetry.lock, Pipfile.lock, requirements.txt)" >&2
   exit 1
