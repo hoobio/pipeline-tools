@@ -382,6 +382,13 @@ function Invoke-NodeScan {
     # otherwise pull in workflow files from transitive packages and our own
     # source artefacts.
     #
+    # If the manifest path has no lockfile but does have a node_modules
+    # directory, we treat it as a deploy tree (e.g. the output of
+    # `pnpm deploy --prod`) and use javascript-package-cataloger, which
+    # reads each node_modules/<pkg>/package.json. This is the right
+    # cataloger for "what's actually installed" snapshots, and for
+    # `--prod` deploy outputs it produces a prod-only component list.
+    #
     # Caveat: as of syft v1.44 the javascript-lock-cataloger reads
     # pnpm-lock.yaml, yarn.lock, package-lock.json - but NOT bun.lock. Bun
     # projects scanned here will produce an empty BOM until upstream syft
@@ -390,6 +397,7 @@ function Invoke-NodeScan {
     $hasBunLockfile  = (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lock')) -or
                       (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lockb'))
     $hasPnpmLockfile = Test-Path -LiteralPath (Join-Path $absManifest 'pnpm-lock.yaml')
+    $hasNodeModules  = Test-Path -LiteralPath (Join-Path $absManifest 'node_modules') -PathType Container
     if ($hasBunLockfile) {
         Write-Warning "Detected bun lockfile in $absManifest. syft v1.x does not parse bun.lock / bun.lockb; the resulting application BOM will be empty. Migrate to pnpm for accurate node-package coverage."
         Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion -Catalogers 'javascript-lock-cataloger'
@@ -398,6 +406,11 @@ function Invoke-NodeScan {
     if ($hasPnpmLockfile) {
         Write-Information "Detected pnpm lockfile in $absManifest; scanning via anchore/syft:$SyftVersion (javascript-lock-cataloger only)" -InformationAction Continue
         Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion -Catalogers 'javascript-lock-cataloger'
+        return
+    }
+    if ($hasNodeModules) {
+        Write-Information "No lockfile in $absManifest but node_modules present; treating as a deploy tree and scanning with javascript-package-cataloger" -InformationAction Continue
+        Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion -Catalogers 'javascript-package-cataloger'
         return
     }
 
