@@ -91,7 +91,8 @@ param(
     [Parameter(Mandatory = $false)] [string]$AdoProjectId,
     [Parameter(Mandatory = $false)] [string]$AdoRepoId,
     [Parameter(Mandatory = $false)] [string]$AdoPrId,
-    [Parameter(Mandatory = $false)] [string]$AdoAccessToken
+    [Parameter(Mandatory = $false)] [string]$AdoAccessToken,
+    [Parameter(Mandatory = $false)] [string]$BomPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -209,6 +210,66 @@ else {
 $summaryLines += ''
 $summaryLines += "_Gate: fails on **$FailOnSeverity** or worse._"
 
+# Component summary (read from BOM when provided). Useful even on clean
+# scans so reviewers see what's actually being tracked.
+$components = @()
+$componentBreakdown = $null
+if ($BomPath -and (Test-Path -LiteralPath $BomPath)) {
+    try {
+        $bom = Get-Content -LiteralPath $BomPath -Raw | ConvertFrom-Json
+        $components = @($bom.components)
+        # Group by type (library, application, operating-system, ...).
+        $componentBreakdown = $components | Group-Object -Property type | Sort-Object Count -Descending
+    }
+    catch {
+        Write-Warning "Could not parse BOM at '$BomPath': $($_.Exception.Message)"
+    }
+}
+
+if ($components.Count -gt 0) {
+    $summaryLines += ''
+    $summaryLines += "### Components ($($components.Count) total)"
+    $summaryLines += ''
+    if ($componentBreakdown) {
+        $summaryLines += '| Type | Count |'
+        $summaryLines += '|---|---:|'
+        foreach ($g in $componentBreakdown) {
+            $typ = if ($g.Name) { $g.Name } else { '_unknown_' }
+            $summaryLines += "| $typ | $($g.Count) |"
+        }
+        $summaryLines += ''
+    }
+    # Collapse the full list so the comment / step summary stays compact.
+    $summaryLines += '<details><summary>Full component list</summary>'
+    $summaryLines += ''
+    $summaryLines += '| Name | Version | Type | Licenses |'
+    $summaryLines += '|---|---|---|---|'
+    $sortedComponents = $components | Sort-Object @{ Expression = { ($_.type ?? '') }; Ascending = $true }, name
+    $compCap = 200
+    $rendered = 0
+    foreach ($c in $sortedComponents) {
+        if ($rendered -ge $compCap) { break }
+        $licenses = ''
+        if ($c.licenses) {
+            $licenses = (@($c.licenses) | ForEach-Object {
+                if ($_.license.id)   { $_.license.id }
+                elseif ($_.license.name) { $_.license.name }
+                elseif ($_.expression)   { $_.expression }
+            }) -join ', '
+        }
+        $name = ($c.name ?? '').Replace('|', '\|')
+        $ver  = ($c.version ?? '').Replace('|', '\|')
+        $typ  = ($c.type ?? '').Replace('|', '\|')
+        $lic  = ($licenses ?? '').Replace('|', '\|')
+        $summaryLines += "| ``$name`` | ``$ver`` | $typ | $lic |"
+        $rendered++
+    }
+    if ($rendered -lt $sortedComponents.Count) {
+        $summaryLines += "| _… $($sortedComponents.Count - $rendered) more truncated_ | | | |"
+    }
+    $summaryLines += '</details>'
+}
+
 if ($ArtifactRunUrl) {
     $summaryLines += ''
     $summaryLines += ":paperclip: **Full HTML report:** see the ``dt-findings`` artifact in [this workflow run]($ArtifactRunUrl)."
@@ -274,7 +335,7 @@ if ($OutputHtmlPath) {
     }
 
     $tableHtml = if ($totalCount -eq 0) {
-        "<div class='empty'>:tada: No findings on this project version.</div>"
+        "<div class='empty'>&#127881; No findings on this project version.</div>"
     } else {
         @"
 <table>
@@ -285,6 +346,48 @@ if ($OutputHtmlPath) {
 $($tableRows -join "`n")
   </tbody>
 </table>
+"@
+    }
+
+    # Components section: same data as the markdown report, rendered as
+    # an HTML table grouped by type. Useful even when findings are clean -
+    # surfaces what's actually being tracked in DT.
+    $componentsHtml = ''
+    if ($components.Count -gt 0) {
+        $countsByType = ''
+        if ($componentBreakdown) {
+            $rows = foreach ($g in $componentBreakdown) {
+                $typ = if ($g.Name) { Escape-Html $g.Name } else { '<em>unknown</em>' }
+                "<tr><td>$typ</td><td style='text-align:right'>$($g.Count)</td></tr>"
+            }
+            $countsByType = "<table class='component-counts'><thead><tr><th>Type</th><th style='text-align:right'>Count</th></tr></thead><tbody>$($rows -join '')</tbody></table>"
+        }
+        $sortedComponents = $components | Sort-Object @{ Expression = { ($_.type ?? '') }; Ascending = $true }, name
+        $compRows = foreach ($c in $sortedComponents) {
+            $licenses = ''
+            if ($c.licenses) {
+                $licenses = (@($c.licenses) | ForEach-Object {
+                    if ($_.license.id)   { $_.license.id }
+                    elseif ($_.license.name) { $_.license.name }
+                    elseif ($_.expression)   { $_.expression }
+                }) -join ', '
+            }
+            "<tr><td><code>$(Escape-Html ($c.name ?? ''))</code></td><td><code>$(Escape-Html ($c.version ?? ''))</code></td><td>$(Escape-Html ($c.type ?? ''))</td><td>$(Escape-Html $licenses)</td></tr>"
+        }
+        $componentsHtml = @"
+<section class='components'>
+  <h2>Components ($($components.Count))</h2>
+  $countsByType
+  <details>
+    <summary>Full component list</summary>
+    <table class='component-table'>
+      <thead><tr><th>Name</th><th>Version</th><th>Type</th><th>Licenses</th></tr></thead>
+      <tbody>
+$($compRows -join "`n")
+      </tbody>
+    </table>
+  </details>
+</section>
 "@
     }
 
@@ -340,6 +443,12 @@ $($tableRows -join "`n")
     .source { color: var(--text-dim); font-size: 0.75rem; margin-left: 0.375rem; }
     .cwe { color: var(--text-dim); font-size: 0.75rem; margin-left: 0.5rem; }
     .empty { text-align: center; padding: 3rem 1rem; background: var(--bg-2); border: 1px solid var(--border); border-radius: 0.5rem; color: var(--low); font-size: 1.125rem; }
+    .components { margin-top: 2rem; }
+    .components h2 { font-size: 1.125rem; color: var(--text-bright); font-weight: 600; margin: 0 0 0.75rem; }
+    .component-counts { width: auto; min-width: 240px; margin-bottom: 1rem; }
+    .components details > summary { cursor: pointer; padding: 0.5rem 0.75rem; background: var(--bg-2); border: 1px solid var(--border); border-radius: 0.375rem; user-select: none; }
+    .components details[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-color: transparent; }
+    .components details > .component-table { border-top-left-radius: 0; border-top-right-radius: 0; }
     footer { max-width: 1100px; margin: 2rem auto 0; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.75rem; text-align: center; }
     footer code { background: var(--bg-2); }
   </style>
@@ -354,6 +463,7 @@ $($tableRows -join "`n")
 $($countCards -join "`n")
     </section>
     $tableHtml
+    $componentsHtml
   </main>
   <footer>Generated by <code>dt-findings-pr-gate</code> from hoobio/pipeline-tools.</footer>
 </body>

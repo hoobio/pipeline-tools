@@ -59,6 +59,12 @@ parameters:
     displayName: HTML-comment marker used to find the prior bot thread for upsert.
     type: string
     default: '<!-- dt-pr-gate -->'
+  - name: bomPath
+    displayName: |
+      Path to the CycloneDX BOM uploaded to DT. When set, the report
+      includes a Components section listing the SBOM's components.
+    type: string
+    default: ''
   - name: displayName
     displayName: Pipeline UI label for the generated step.
     type: string
@@ -90,6 +96,7 @@ steps:
         $params.AdoPrId          = $prId
         $params.AdoAccessToken   = $env:DT_ADO_TOKEN
       }
+      if ($env:DT_BOM_PATH) { $params.BomPath = $env:DT_BOM_PATH }
       & "${{ parameters.scriptsDir }}/dependency-track/Get-DTFindingsAndGate.ps1" @params
     env:
       DT_SERVER_URL:    ${{ parameters.serverUrl }}
@@ -101,6 +108,7 @@ steps:
       DT_HTML_OUT:      ${{ parameters.htmlOutputPath }}
       DT_COMMENT_ON_PR: ${{ parameters.commentOnPr }}
       DT_ADO_TOKEN:     ${{ parameters.adoAccessToken }}
+      DT_BOM_PATH:      ${{ parameters.bomPath }}
     displayName: ${{ parameters.displayName }}
     ${{ if ne(parameters.condition, '') }}:
       condition: ${{ parameters.condition }}

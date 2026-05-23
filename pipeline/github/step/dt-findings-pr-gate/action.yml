@@ -66,6 +66,13 @@ inputs:
       github.server_url, github.repository, and github.run_id.
     required: false
     default: ''
+  bom-path:
+    description: |
+      Path to the CycloneDX BOM that was uploaded to DT. When set, the
+      report includes a Components section listing the SBOM's components -
+      useful on clean scans so reviewers see what's actually being tracked.
+    required: false
+    default: ''
 
 outputs:
   total-count:
@@ -104,6 +111,7 @@ runs:
         DT_COMMENT_MARK:  ${{ inputs.comment-marker }}
         DT_HTML_OUT:      ${{ inputs.html-output-path }}
         DT_ARTIFACT_URL:  ${{ inputs.artifact-run-url }}
+        DT_BOM_PATH:      ${{ inputs.bom-path }}
       run: |
         $params = @{
           ServerUrl       = $env:DT_SERVER_URL
@@ -118,5 +126,6 @@ runs:
         if ($env:DT_GITHUB_TOKEN) { $params.GithubToken     = $env:DT_GITHUB_TOKEN }
         if ($env:DT_HTML_OUT)     { $params.OutputHtmlPath  = $env:DT_HTML_OUT
                                     $params.ArtifactRunUrl  = $env:DT_ARTIFACT_URL }
+        if ($env:DT_BOM_PATH)     { $params.BomPath         = $env:DT_BOM_PATH }
 
         & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Get-DTFindingsAndGate.ps1" @params
