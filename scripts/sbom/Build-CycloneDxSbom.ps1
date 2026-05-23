@@ -417,6 +417,9 @@ function Invoke-CycloneDxMerge {
         $outDir    = Split-Path -Path $absOutput -Parent
         $outFile   = Split-Path -Path $absOutput -Leaf
 
+        # Pin output to spec 1.6 - cyclonedx-cli 0.30+ defaults to 1.7 but
+        # Dependency-Track (and many other consumers) reject Unrecognized
+        # specVersion until they upgrade their parser.
         $dockerArgs = @(
             'run', '--rm',
             '-v', "${stagingDir}:/in:ro",
@@ -424,7 +427,8 @@ function Invoke-CycloneDxMerge {
             $CliImage,
             'merge', '--input-files'
         ) + $containerInputs + @(
-            '--output-file', "/out/$outFile"
+            '--output-file', "/out/$outFile",
+            '--output-version', 'v1_6'
         )
 
         & docker @dockerArgs
