@@ -161,6 +161,28 @@ function Assert-DockerAvailable {
     }
 }
 
+function Set-OutputReadable {
+    # Container writes happen as root inside the volume mount, leaving the
+    # host-side file root-owned. Downstream steps (uploads, attestation) run
+    # as the agent's non-root user and hit 'Access denied' on read. Fix the
+    # mode + ownership defensively after each scan. Linux-only; on Windows
+    # the bind mount maps to the host user already.
+    param([Parameter(Mandatory)] [string]$Path)
+    if ($IsWindows) { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    & sudo --non-interactive chmod 644 $Path 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        # No passwordless sudo (e.g. local dev shell). Best-effort chmod
+        # without sudo; if that also fails, surface a warning - the next
+        # step is likely to hit 'Access denied' on read.
+        & chmod 644 $Path 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Could not chmod 644 '$Path' - downstream reads may fail."
+        }
+    }
+    & sudo --non-interactive chown "$(id -u):$(id -g)" $Path 2>$null
+}
+
 function Invoke-SyftScan {
     param(
         [Parameter(Mandatory)] [string]$Image,
@@ -189,6 +211,7 @@ function Invoke-SyftScan {
     if (-not (Test-Path -LiteralPath $absOutput)) {
         throw "Syft did not produce expected output at '$absOutput'"
     }
+    Set-OutputReadable -Path $absOutput
 }
 
 function Invoke-SyftDirScan {
@@ -219,6 +242,7 @@ function Invoke-SyftDirScan {
     if (-not (Test-Path -LiteralPath $absOutput)) {
         throw "Syft did not produce expected output at '$absOutput'"
     }
+    Set-OutputReadable -Path $absOutput
 }
 
 function Invoke-PythonScan {
@@ -276,6 +300,7 @@ fi
     if (-not (Test-Path -LiteralPath $absOutput)) {
         throw "cyclonedx-py did not produce expected output at '$absOutput'"
     }
+    Set-OutputReadable -Path $absOutput
 }
 
 function Invoke-NodeScan {
@@ -336,6 +361,7 @@ npx -y -p "@cyclonedx/cyclonedx-npm@$CycloneDxNpmVersion" cyclonedx-npm \
     if (-not (Test-Path -LiteralPath $absOutput)) {
         throw "cyclonedx-npm did not produce expected output at '$absOutput'"
     }
+    Set-OutputReadable -Path $absOutput
 }
 
 function Invoke-DotnetScan {
@@ -439,6 +465,7 @@ function Invoke-CycloneDxMerge {
         if (-not (Test-Path -LiteralPath $absOutput)) {
             throw "cyclonedx-cli merge did not produce expected output at '$absOutput'"
         }
+        Set-OutputReadable -Path $absOutput
     }
     finally {
         if (Test-Path -LiteralPath $stagingDir) {
