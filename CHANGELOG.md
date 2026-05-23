@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/hoobio/pipeline-tools/compare/v2.2.1...v2.3.0) (2026-05-23)
+
+
+### Features
+
+* **sbom:** scope catalogers + add optional GitHub Actions scan ([#30](https://github.com/hoobio/pipeline-tools/issues/30)) ([7fa1923](https://github.com/hoobio/pipeline-tools/commit/7fa19239bf5d3050b0b72f57fa2c2651af841de0))
+
 ## [2.2.1](https://github.com/hoobio/pipeline-tools/compare/v2.2.0...v2.2.1) (2026-05-23)
 
 
