@@ -76,17 +76,19 @@ parameters:
 
 steps:
   - pwsh: |
+      $summaryFile = Join-Path $env:AGENT_TEMPDIRECTORY "dt-findings-summary-$($env:DT_PROJECT_NAME)-$($env:DT_PROJECT_VER -replace '[^A-Za-z0-9._-]','_').md"
       $params = @{
-        ServerUrl       = $env:DT_SERVER_URL
-        ApiKey          = $env:DT_API_KEY
-        ProjectName     = $env:DT_PROJECT_NAME
-        ProjectVersion  = $env:DT_PROJECT_VER
-        FailOnSeverity  = $env:DT_FAIL_ON
-        CommentMarker   = $env:DT_COMMENT_MARK
-        OutputHtmlPath  = $env:DT_HTML_OUT
+        ServerUrl         = $env:DT_SERVER_URL
+        ApiKey            = $env:DT_API_KEY
+        ProjectName       = $env:DT_PROJECT_NAME
+        ProjectVersion    = $env:DT_PROJECT_VER
+        FailOnSeverity    = $env:DT_FAIL_ON
+        CommentMarker     = $env:DT_COMMENT_MARK
+        OutputHtmlPath    = $env:DT_HTML_OUT
+        OutputSummaryPath = $summaryFile
         # Build summary link: ADO publishes the artifact to the build's
         # artifacts pane, which the PR sidebar links to. Build URL is enough.
-        ArtifactRunUrl  = "$($env:SYSTEM_COLLECTIONURI.TrimEnd('/'))/$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
+        ArtifactRunUrl    = "$($env:SYSTEM_COLLECTIONURI.TrimEnd('/'))/$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
       }
       $prId = $env:SYSTEM_PULLREQUEST_PULLREQUESTID
       if ($env:DT_COMMENT_ON_PR -eq 'true' -and $prId) {
@@ -97,7 +99,17 @@ steps:
         $params.AdoAccessToken   = $env:DT_ADO_TOKEN
       }
       if ($env:DT_BOM_PATH) { $params.BomPath = $env:DT_BOM_PATH }
-      & "${{ parameters.scriptsDir }}/dependency-track/Get-DTFindingsAndGate.ps1" @params
+      # Pin the markdown summary to the Extensions tab even if the gate
+      # throws below, so reviewers see the partial report when failing.
+      Write-Host "##vso[task.setvariable variable=DT_SUMMARY_FILE]$summaryFile"
+      try {
+        & "${{ parameters.scriptsDir }}/dependency-track/Get-DTFindingsAndGate.ps1" @params
+      }
+      finally {
+        if (Test-Path -LiteralPath $summaryFile) {
+          Write-Host "##vso[task.uploadsummary]$summaryFile"
+        }
+      }
     env:
       DT_SERVER_URL:    ${{ parameters.serverUrl }}
       DT_API_KEY:       ${{ parameters.apiKey }}
@@ -112,32 +124,6 @@ steps:
     displayName: ${{ parameters.displayName }}
     ${{ if ne(parameters.condition, '') }}:
       condition: ${{ parameters.condition }}
-
-  # Pin the HTML report to the build's Summary page via task.uploadsummary.
-  # ADO doesn't support custom tabs without an extension, so the summary
-  # markdown rendered as part of the run is the closest we can get to an
-  # in-build report viewer. The full HTML stays as a downloadable artifact.
-  - pwsh: |
-      $summaryPath = Join-Path $env:AGENT_TEMPDIRECTORY 'dt-findings-summary.md'
-      $artifactUrl = "$($env:SYSTEM_COLLECTIONURI.TrimEnd('/'))/$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
-      $lines = @(
-        '## Dependency-Track findings',
-        '',
-        "**Project:** ``$($env:DT_PROJECT_NAME)@$($env:DT_PROJECT_VER)``",
-        "**Gate:** fails on ``$($env:DT_FAIL_ON)`` or worse",
-        '',
-        "The full HTML report is published as the ``$($env:DT_HTML_ARTIFACT)`` pipeline artifact ([open this run]($artifactUrl))."
-      )
-      Set-Content -LiteralPath $summaryPath -Value ($lines -join "`n") -Encoding UTF8
-      Write-Host "##vso[task.uploadsummary]$summaryPath"
-    env:
-      DT_HTML_OUT:      ${{ parameters.htmlOutputPath }}
-      DT_PROJECT_NAME:  ${{ parameters.projectName }}
-      DT_PROJECT_VER:   ${{ parameters.projectVersion }}
-      DT_FAIL_ON:       ${{ parameters.failOnSeverity }}
-      DT_HTML_ARTIFACT: ${{ parameters.htmlArtifactName }}
-    displayName: 'Pin findings summary to build page'
-    condition: always()
 
   # Always publish, even on gate failure, so reviewers can pull the report
   # when investigating a tripped gate. The script writes a placeholder HTML

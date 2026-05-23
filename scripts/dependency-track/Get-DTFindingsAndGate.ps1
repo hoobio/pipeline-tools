@@ -92,7 +92,8 @@ param(
     [Parameter(Mandatory = $false)] [string]$AdoRepoId,
     [Parameter(Mandatory = $false)] [string]$AdoPrId,
     [Parameter(Mandatory = $false)] [string]$AdoAccessToken,
-    [Parameter(Mandatory = $false)] [string]$BomPath
+    [Parameter(Mandatory = $false)] [string]$BomPath,
+    [Parameter(Mandatory = $false)] [string]$OutputSummaryPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -477,6 +478,16 @@ $($countCards -join "`n")
 # Write the step summary so the run page surfaces it.
 if ($env:GITHUB_STEP_SUMMARY) {
     Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary
+}
+
+# Caller-supplied summary path (used by the ADO template so task.uploadsummary
+# can pin the same rich markdown to the build's Extensions tab).
+if ($OutputSummaryPath) {
+    $summaryDir = Split-Path -Path ([System.IO.Path]::GetFullPath($OutputSummaryPath)) -Parent
+    if ($summaryDir -and -not (Test-Path -LiteralPath $summaryDir)) {
+        New-Item -Path $summaryDir -ItemType Directory -Force | Out-Null
+    }
+    Set-Content -LiteralPath $OutputSummaryPath -Value $summary -Encoding UTF8
 }
 
 # Optionally upsert a PR comment.
