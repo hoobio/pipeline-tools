@@ -29,10 +29,22 @@ parameters:
     type: string
   - name: failOnSeverity
     displayName: |
-      Lowest severity that fails the build. One of: critical, high, medium,
-      low, info, none. 'none' makes the step purely informational.
+      Lowest severity that triggers the gate. One of: critical, high, medium,
+      low, info, none. 'none' disables the gate.
     type: string
     default: critical
+  - name: gateMode
+    displayName: |
+      How the gate enforces when tripped. One of:
+        error   - fails the build.
+        warning - marks the build partiallySucceeded (SucceededWithIssues).
+        off     - report only.
+    type: string
+    default: error
+    values:
+      - error
+      - warning
+      - off
   - name: htmlOutputPath
     displayName: |
       Path the HTML findings report is written to. The file is also published
