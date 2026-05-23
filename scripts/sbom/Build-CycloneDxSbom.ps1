@@ -53,7 +53,10 @@ Path the application scanner reads from. Semantics differ by language:
 
     python   Directory containing pyproject.toml + a recognised lockfile
              (uv.lock, poetry.lock, Pipfile.lock, or requirements.txt).
-    node     Directory containing package.json + lockfile.
+    node     Directory containing package.json + lockfile. When the
+             lockfile is bun.lock (text) or bun.lockb (binary), the directory
+             is scanned via Syft so the lockfile is read accurately. Otherwise
+             cyclonedx-npm reads package-lock.json / yarn.lock / pnpm-lock.
     dotnet   Path to a .sln, .slnx, or .csproj file.
 
 .PARAMETER PythonImage
@@ -108,7 +111,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$SyftVersion = 'v1.17.0',
+    [string]$SyftVersion = 'v1.44.0',
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('none', 'python', 'node', 'dotnet')]
@@ -119,15 +122,15 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$PythonImage = 'python:3.12-slim',
+    [string]$PythonImage = 'python:3.13-slim',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$CycloneDxPyVersion = '5.3.0',
+    [string]$CycloneDxPyVersion = '7.3.0',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$NodeImage = 'node:20-alpine',
+    [string]$NodeImage = 'node:22-alpine',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
@@ -139,11 +142,11 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$DotnetToolVersion = '6.1.1',
+    [string]$DotnetToolVersion = '6.2.0',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$CycloneDxCliImage = 'cyclonedx/cyclonedx-cli:0.27.2',
+    [string]$CycloneDxCliImage = 'cyclonedx/cyclonedx-cli:0.32.0',
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
@@ -188,6 +191,36 @@ function Invoke-SyftScan {
     }
 }
 
+function Invoke-SyftDirScan {
+    param(
+        [Parameter(Mandatory)] [string]$DirPath,
+        [Parameter(Mandatory)] [string]$OutputPath,
+        [Parameter(Mandatory)] [string]$SyftVersion
+    )
+    Assert-DockerAvailable
+
+    $absDir    = (Resolve-Path -LiteralPath $DirPath).Path
+    $absOutput = [System.IO.Path]::GetFullPath($OutputPath)
+    $outDir    = Split-Path -Path $absOutput -Parent
+    $outFile   = Split-Path -Path $absOutput -Leaf
+
+    Write-Information "Generating directory BOM for $absDir via anchore/syft:$SyftVersion" -InformationAction Continue
+
+    & docker run --rm `
+        -v "${absDir}:/work:ro" `
+        -v "${outDir}:/out" `
+        "anchore/syft:$SyftVersion" `
+        'dir:/work' `
+        -o "cyclonedx-json=/out/$outFile"
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Syft directory scan failed for '$absDir' (exit $LASTEXITCODE)"
+    }
+    if (-not (Test-Path -LiteralPath $absOutput)) {
+        throw "Syft did not produce expected output at '$absOutput'"
+    }
+}
+
 function Invoke-PythonScan {
     param(
         [Parameter(Mandatory)] [string]$ManifestPath,
@@ -218,13 +251,13 @@ pip install --no-cache-dir --quiet 'cyclonedx-bom==$CycloneDxPyVersion'
 if [ -f uv.lock ]; then
   pip install --no-cache-dir --quiet uv
   uv export --format requirements-txt --no-hashes --no-emit-project --quiet > /tmp/req.txt
-  cyclonedx-py requirements /tmp/req.txt --output-format JSON --outfile "/out/$outFile"
+  cyclonedx-py requirements /tmp/req.txt --output-format JSON --output-file "/out/$outFile"
 elif [ -f poetry.lock ]; then
-  cyclonedx-py poetry --output-format JSON --outfile "/out/$outFile"
+  cyclonedx-py poetry --output-format JSON --output-file "/out/$outFile"
 elif [ -f Pipfile.lock ]; then
-  cyclonedx-py pipenv --output-format JSON --outfile "/out/$outFile"
+  cyclonedx-py pipenv --output-format JSON --output-file "/out/$outFile"
 elif [ -f requirements.txt ]; then
-  cyclonedx-py requirements requirements.txt --output-format JSON --outfile "/out/$outFile"
+  cyclonedx-py requirements requirements.txt --output-format JSON --output-file "/out/$outFile"
 else
   echo "no supported Python lockfile in /work (looked for uv.lock, poetry.lock, Pipfile.lock, requirements.txt)" >&2
   exit 1
@@ -250,7 +283,8 @@ function Invoke-NodeScan {
         [Parameter(Mandatory)] [string]$ManifestPath,
         [Parameter(Mandatory)] [string]$OutputPath,
         [Parameter(Mandatory)] [string]$NodeImage,
-        [Parameter(Mandatory)] [string]$CycloneDxNpmVersion
+        [Parameter(Mandatory)] [string]$CycloneDxNpmVersion,
+        [Parameter(Mandatory)] [string]$SyftVersion
     )
     Assert-DockerAvailable
 
@@ -259,6 +293,18 @@ function Invoke-NodeScan {
     }
 
     $absManifest = (Resolve-Path -LiteralPath $ManifestPath).Path
+
+    # cyclonedx-npm doesn't understand bun's lockfile (neither the binary
+    # bun.lockb nor the JSON bun.lock format introduced in bun 1.2). Syft
+    # does, so route bun projects through a directory scan when detected.
+    $hasBunLockfile = (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lock')) -or
+                      (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lockb'))
+    if ($hasBunLockfile) {
+        Write-Information "Detected bun lockfile in $absManifest; scanning via anchore/syft:$SyftVersion" -InformationAction Continue
+        Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion
+        return
+    }
+
     $absOutput   = [System.IO.Path]::GetFullPath($OutputPath)
     $outDir      = Split-Path -Path $absOutput -Parent
     $outFile     = Split-Path -Path $absOutput -Leaf
@@ -371,6 +417,9 @@ function Invoke-CycloneDxMerge {
         $outDir    = Split-Path -Path $absOutput -Parent
         $outFile   = Split-Path -Path $absOutput -Leaf
 
+        # Pin output to spec 1.6 - cyclonedx-cli 0.30+ defaults to 1.7 but
+        # Dependency-Track (and many other consumers) reject Unrecognized
+        # specVersion until they upgrade their parser.
         $dockerArgs = @(
             'run', '--rm',
             '-v', "${stagingDir}:/in:ro",
@@ -378,7 +427,8 @@ function Invoke-CycloneDxMerge {
             $CliImage,
             'merge', '--input-files'
         ) + $containerInputs + @(
-            '--output-file', "/out/$outFile"
+            '--output-file', "/out/$outFile",
+            '--output-version', 'v1_6'
         )
 
         & docker @dockerArgs
@@ -433,7 +483,8 @@ try {
             }
             'node' {
                 Invoke-NodeScan -ManifestPath $AppManifestPath -OutputPath $appBomPath `
-                    -NodeImage $NodeImage -CycloneDxNpmVersion $CycloneDxNpmVersion
+                    -NodeImage $NodeImage -CycloneDxNpmVersion $CycloneDxNpmVersion `
+                    -SyftVersion $SyftVersion
             }
             'dotnet' {
                 Invoke-DotnetScan -ManifestPath $AppManifestPath -OutputPath $appBomPath `

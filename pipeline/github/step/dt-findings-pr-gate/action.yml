@@ -1,0 +1,141 @@
+name: Dependency-Track findings PR gate
+description: |
+  Queries Dependency-Track for the findings on a (name, version) project,
+  writes a Markdown summary to the step summary, optionally upserts a PR
+  comment (CodeQL-bot style), and fails the step when findings at or above
+  `fail-on-severity` are present.
+
+  Typical use: run after upload-sbom-to-dependency-track on a pull-request
+  build, passing `pr-number` so reviewers see the findings inline. Use
+  `fail-on-severity: none` to make the step purely informational.
+
+  Requires VIEW_PORTFOLIO + VIEW_VULNERABILITY on the DT API key (the same
+  read scope used by /api/v1/finding/project).
+
+inputs:
+  server-url:
+    description: Dependency-Track server URL including scheme.
+    required: true
+  api-key:
+    description: DT API key with VIEW_PORTFOLIO + VIEW_VULNERABILITY.
+    required: true
+  project-name:
+    description: DT project name (the `component` passed to upload).
+    required: true
+  project-version:
+    description: DT project version (the `project-version` passed to upload).
+    required: true
+  fail-on-severity:
+    description: |
+      Lowest severity that triggers the gate. One of: critical, high, medium,
+      low, info, none. 'none' disables the gate.
+    required: false
+    default: critical
+  gate-mode:
+    description: |
+      How the gate enforces when tripped. One of:
+        error   - exit non-zero, failing the step (default).
+        warning - exit 0 but emit a warning annotation.
+        off     - report only.
+    required: false
+    default: error
+  pr-number:
+    description: GitHub PR number to upsert a comment on. Empty for no comment.
+    required: false
+    default: ''
+  repo:
+    description: |
+      GitHub repository in <owner>/<repo> form. Required when pr-number is
+      set. Composite-action input defaults can't read the github context,
+      so callers must pass this explicitly (e.g. the github.repository value).
+    required: false
+    default: ''
+  github-token:
+    description: |
+      GitHub token with pull-requests:write. Required when pr-number is set.
+      Pass github.token or a PAT from the caller workflow.
+    required: false
+    default: ''
+  comment-marker:
+    description: HTML-comment marker used to identify the prior bot comment for upsert.
+    required: false
+    default: '<!-- dt-pr-gate -->'
+  html-output-path:
+    description: |
+      Optional path to write a self-contained HTML findings report. Upload as
+      a workflow artifact afterwards (e.g. via actions/upload-artifact) so the
+      PR comment's "Full HTML report" link resolves to it.
+    required: false
+    default: ''
+  artifact-run-url:
+    description: |
+      URL surfaced in the PR comment as the destination of the "Full HTML
+      report" link. Callers should pass the current run URL composed from
+      github.server_url, github.repository, and github.run_id.
+    required: false
+    default: ''
+  bom-path:
+    description: |
+      Path to the CycloneDX BOM that was uploaded to DT. When set, the
+      report includes a Components section listing the SBOM's components -
+      useful on clean scans so reviewers see what's actually being tracked.
+    required: false
+    default: ''
+
+outputs:
+  total-count:
+    description: Total number of findings on the project.
+    value: ${{ steps.gate.outputs.total-count }}
+  critical-count:
+    description: Number of critical findings.
+    value: ${{ steps.gate.outputs.critical-count }}
+  high-count:
+    description: Number of high findings.
+    value: ${{ steps.gate.outputs.high-count }}
+  medium-count:
+    description: Number of medium findings.
+    value: ${{ steps.gate.outputs.medium-count }}
+  low-count:
+    description: Number of low findings.
+    value: ${{ steps.gate.outputs.low-count }}
+  gate-tripped:
+    description: '"true" when findings at or above fail-on-severity were present.'
+    value: ${{ steps.gate.outputs.gate-tripped }}
+
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: pwsh
+      env:
+        DT_SERVER_URL:    ${{ inputs.server-url }}
+        DT_API_KEY:       ${{ inputs.api-key }}
+        DT_PROJECT_NAME:  ${{ inputs.project-name }}
+        DT_PROJECT_VER:   ${{ inputs.project-version }}
+        DT_FAIL_ON:       ${{ inputs.fail-on-severity }}
+        DT_GATE_MODE:     ${{ inputs.gate-mode }}
+        DT_PR_NUMBER:     ${{ inputs.pr-number }}
+        DT_REPO:          ${{ inputs.repo }}
+        DT_GITHUB_TOKEN:  ${{ inputs.github-token }}
+        DT_COMMENT_MARK:  ${{ inputs.comment-marker }}
+        DT_HTML_OUT:      ${{ inputs.html-output-path }}
+        DT_ARTIFACT_URL:  ${{ inputs.artifact-run-url }}
+        DT_BOM_PATH:      ${{ inputs.bom-path }}
+      run: |
+        $params = @{
+          ServerUrl       = $env:DT_SERVER_URL
+          ApiKey          = $env:DT_API_KEY
+          ProjectName     = $env:DT_PROJECT_NAME
+          ProjectVersion  = $env:DT_PROJECT_VER
+          FailOnSeverity  = $env:DT_FAIL_ON
+          GateMode        = $env:DT_GATE_MODE
+          CommentMarker   = $env:DT_COMMENT_MARK
+        }
+        if ($env:DT_PR_NUMBER)    { $params.PrNumber        = $env:DT_PR_NUMBER }
+        if ($env:DT_REPO)         { $params.RepoName        = $env:DT_REPO }
+        if ($env:DT_GITHUB_TOKEN) { $params.GithubToken     = $env:DT_GITHUB_TOKEN }
+        if ($env:DT_HTML_OUT)     { $params.OutputHtmlPath  = $env:DT_HTML_OUT
+                                    $params.ArtifactRunUrl  = $env:DT_ARTIFACT_URL }
+        if ($env:DT_BOM_PATH)     { $params.BomPath         = $env:DT_BOM_PATH }
+
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/dependency-track/Get-DTFindingsAndGate.ps1" @params

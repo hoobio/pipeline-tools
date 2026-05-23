@@ -96,7 +96,7 @@ parameters:
   - name: syftVersion
     displayName: Pinned anchore/syft image tag.
     type: string
-    default: v1.17.0
+    default: v1.44.0
   - name: appLanguage
     displayName: 'Application scanner. One of: none, python, node, dotnet.'
     type: string
@@ -114,13 +114,13 @@ parameters:
     default: ''
   - name: pythonImage
     type: string
-    default: 'python:3.12-slim'
+    default: 'python:3.13-slim'
   - name: cycloneDxPyVersion
     type: string
-    default: '5.3.0'
+    default: '7.3.0'
   - name: nodeImage
     type: string
-    default: 'node:20-alpine'
+    default: 'node:22-alpine'
   - name: cycloneDxNpmVersion
     type: string
     default: '4.2.1'
@@ -129,10 +129,10 @@ parameters:
     default: '1.6'
   - name: dotnetToolVersion
     type: string
-    default: '6.1.1'
+    default: '6.2.0'
   - name: cycloneDxCliImage
     type: string
-    default: 'cyclonedx/cyclonedx-cli:0.27.2'
+    default: 'cyclonedx/cyclonedx-cli:0.32.0'
 
   - name: bomPath
     displayName: |

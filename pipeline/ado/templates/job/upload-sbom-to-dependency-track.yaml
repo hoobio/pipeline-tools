@@ -120,7 +120,7 @@ parameters:
   - name: cyclonedxToolVersion
     displayName: Pinned dotnet CycloneDX tool version.
     type: string
-    default: 6.1.1
+    default: 6.2.0
   - name: dtServerUrl
     displayName: Dependency-Track base URL including scheme.
     type: string

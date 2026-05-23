@@ -50,7 +50,7 @@ inputs:
   syft-version:
     description: Pinned anchore/syft image tag.
     required: false
-    default: v1.17.0
+    default: v1.44.0
   app-language:
     description: 'Application scanner. One of: none, python, node, dotnet.'
     required: false
@@ -64,15 +64,15 @@ inputs:
   python-image:
     description: Docker image used to run cyclonedx-py.
     required: false
-    default: 'python:3.12-slim'
+    default: 'python:3.13-slim'
   cyclonedx-py-version:
     description: Pinned cyclonedx-bom (cyclonedx-py) version.
     required: false
-    default: '5.3.0'
+    default: '7.3.0'
   node-image:
     description: Docker image used to run cyclonedx-npm.
     required: false
-    default: 'node:20-alpine'
+    default: 'node:22-alpine'
   cyclonedx-npm-version:
     description: Pinned '@cyclonedx/cyclonedx-npm' version.
     required: false
@@ -84,11 +84,11 @@ inputs:
   dotnet-tool-version:
     description: Pinned dotnet CycloneDX tool version.
     required: false
-    default: '6.1.1'
+    default: '6.2.0'
   cyclonedx-cli-image:
     description: Docker image used to run cyclonedx-cli merge.
     required: false
-    default: 'cyclonedx/cyclonedx-cli:0.27.2'
+    default: 'cyclonedx/cyclonedx-cli:0.32.0'
   generated-bom-path:
     description: |
       Output path used when this action generates the BOM (bom-path empty).
