@@ -161,7 +161,7 @@ function Assert-DockerAvailable {
     }
 }
 
-function Set-OutputReadable {
+function Repair-OutputPermissions {
     # Container writes happen as root inside the volume mount, leaving the
     # host-side file root-owned. Downstream steps (uploads, attestation) run
     # as the agent's non-root user and hit 'Access denied' on read. Fix the
@@ -211,7 +211,7 @@ function Invoke-SyftScan {
     if (-not (Test-Path -LiteralPath $absOutput)) {
         throw "Syft did not produce expected output at '$absOutput'"
     }
-    Set-OutputReadable -Path $absOutput
+    Repair-OutputPermissions -Path $absOutput
 }
 
 function Invoke-SyftDirScan {
@@ -242,7 +242,7 @@ function Invoke-SyftDirScan {
     if (-not (Test-Path -LiteralPath $absOutput)) {
         throw "Syft did not produce expected output at '$absOutput'"
     }
-    Set-OutputReadable -Path $absOutput
+    Repair-OutputPermissions -Path $absOutput
 }
 
 function Invoke-PythonScan {
@@ -300,7 +300,7 @@ fi
     if (-not (Test-Path -LiteralPath $absOutput)) {
         throw "cyclonedx-py did not produce expected output at '$absOutput'"
     }
-    Set-OutputReadable -Path $absOutput
+    Repair-OutputPermissions -Path $absOutput
 }
 
 function Invoke-NodeScan {
@@ -361,7 +361,7 @@ npx -y -p "@cyclonedx/cyclonedx-npm@$CycloneDxNpmVersion" cyclonedx-npm \
     if (-not (Test-Path -LiteralPath $absOutput)) {
         throw "cyclonedx-npm did not produce expected output at '$absOutput'"
     }
-    Set-OutputReadable -Path $absOutput
+    Repair-OutputPermissions -Path $absOutput
 }
 
 function Invoke-DotnetScan {
@@ -465,7 +465,7 @@ function Invoke-CycloneDxMerge {
         if (-not (Test-Path -LiteralPath $absOutput)) {
             throw "cyclonedx-cli merge did not produce expected output at '$absOutput'"
         }
-        Set-OutputReadable -Path $absOutput
+        Repair-OutputPermissions -Path $absOutput
     }
     finally {
         if (Test-Path -LiteralPath $stagingDir) {
