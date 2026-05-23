@@ -98,6 +98,16 @@ parameters:
     type: string
     default: 'cyclonedx/cyclonedx-cli:0.32.0'
 
+  - name: scanGithubActionsPath
+    displayName: |
+      Optional directory of workflow YAML to scan with the github-actions
+      catalogers (typically .github/workflows). The resulting BOM is merged
+      with the container + app BOMs. Empty disables the scan. The image scan
+      drops the github-actions catalogers regardless, so consumers wanting
+      GitHub Actions in their BOM must set this parameter explicitly.
+    type: string
+    default: ''
+
   - name: outputPath
     displayName: Destination path for the generated CycloneDX JSON BOM.
     type: string
@@ -125,8 +135,9 @@ steps:
         DotnetToolVersion    = $env:BOM_DOTNET_TOOL_VERSION
         CycloneDxCliImage    = $env:BOM_CYCLONEDX_CLI_IMAGE
       }
-      if ($env:BOM_IMAGE)             { $params.Image = $env:BOM_IMAGE }
-      if ($env:BOM_APP_MANIFEST_PATH) { $params.AppManifestPath = $env:BOM_APP_MANIFEST_PATH }
+      if ($env:BOM_IMAGE)                { $params.Image = $env:BOM_IMAGE }
+      if ($env:BOM_APP_MANIFEST_PATH)    { $params.AppManifestPath = $env:BOM_APP_MANIFEST_PATH }
+      if ($env:BOM_SCAN_GH_ACTIONS_PATH) { $params.ScanGithubActionsPath = $env:BOM_SCAN_GH_ACTIONS_PATH }
 
       & "${{ parameters.scriptsDir }}/sbom/Build-CycloneDxSbom.ps1" @params
     env:
@@ -141,6 +152,7 @@ steps:
       BOM_DOTNET_SPEC_VERSION:   ${{ parameters.dotnetSpecVersion }}
       BOM_DOTNET_TOOL_VERSION:   ${{ parameters.dotnetToolVersion }}
       BOM_CYCLONEDX_CLI_IMAGE:   ${{ parameters.cycloneDxCliImage }}
+      BOM_SCAN_GH_ACTIONS_PATH:  ${{ parameters.scanGithubActionsPath }}
       BOM_OUTPUT_PATH:           ${{ parameters.outputPath }}
     displayName: ${{ parameters.displayName }}
     ${{ if ne(parameters.condition, '') }}:
