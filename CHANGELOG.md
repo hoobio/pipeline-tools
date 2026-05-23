@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/hoobio/pipeline-tools/compare/v2.2.0...v2.2.1) (2026-05-23)
+
+
+### Bug Fixes
+
+* **sbom:** chmod + chown output after docker scans (fix Access denied downstream) ([#28](https://github.com/hoobio/pipeline-tools/issues/28)) ([6353ded](https://github.com/hoobio/pipeline-tools/commit/6353ded02f566c3e407be97e6b4f5fd18109e588))
+
 ## [2.2.0](https://github.com/hoobio/pipeline-tools/compare/v2.1.0...v2.2.0) (2026-05-23)
 
 
