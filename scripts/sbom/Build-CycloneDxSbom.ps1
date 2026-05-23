@@ -216,13 +216,18 @@ function Invoke-SyftScan {
     # consumer-scoped github-actions scan via -ScanGithubActionsPath. Strip
     # them here to keep the container BOM focused on OS + filesystem
     # packages.
+    #
+    # Also strip the `file` tag: when CycloneDX output is selected syft
+    # auto-adds file-cataloger, which then emits a duplicate `type: file`
+    # component for every package.json (e.g. /node_modules/.pnpm/zod@.../
+    # package.json next to the real `pkg:npm/zod@...` library entry).
     & docker run --rm `
         -v '/var/run/docker.sock:/var/run/docker.sock' `
         -v "${outDir}:/out" `
         -w /out `
         "anchore/syft:$SyftVersion" `
         $Image `
-        --select-catalogers '-github-actions-usage-cataloger,-github-action-workflow-usage-cataloger' `
+        --select-catalogers '-github-actions-usage-cataloger,-github-action-workflow-usage-cataloger,-file' `
         -o "cyclonedx-json=$outFile"
 
     if ($LASTEXITCODE -ne 0) {
@@ -265,6 +270,10 @@ function Invoke-SyftDirScan {
     if ($Catalogers) {
         $dockerArgs += @('--override-default-catalogers', $Catalogers)
     }
+    # Suppress the file cataloger: when CycloneDX output is requested syft
+    # auto-adds it to the selection, which emits a duplicate type=file
+    # component per package.json next to the real library entry.
+    $dockerArgs += @('--select-catalogers', '-file')
     $dockerArgs += @('-o', "cyclonedx-json=/out/$outFile")
 
     & docker @dockerArgs
