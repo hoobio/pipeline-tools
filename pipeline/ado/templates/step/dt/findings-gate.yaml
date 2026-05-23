@@ -1,0 +1,116 @@
+# Query Dependency-Track findings for a (name, version) project, render a
+# self-contained HTML report, publish it as a pipeline artifact, optionally
+# upsert a comment on the associated ADO pull request, and fail the build
+# when findings at or above `failOnSeverity` are present.
+#
+# Wraps scripts/dependency-track/Get-DTFindingsAndGate.ps1. Designed to run
+# after pipeline/ado/templates/step/sbom/upload-sbom-to-dependency-track.yaml
+# so the (component, projectVersion) project already exists in DT.
+#
+# When triggered by an ADO PR build (System.PullRequest.PullRequestId is set),
+# the gate posts/updates a thread on the PR with the severity summary and a
+# link to the published HTML artifact. Non-PR builds skip the comment.
+
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+  - name: serverUrl
+    displayName: Dependency-Track base URL including scheme.
+    type: string
+  - name: apiKey
+    displayName: Dependency-Track API key. Mark the source variable as a secret.
+    type: string
+  - name: projectName
+    displayName: DT project name (the `component` value passed to upload).
+    type: string
+  - name: projectVersion
+    displayName: DT project version (the `projectVersion` passed to upload).
+    type: string
+  - name: failOnSeverity
+    displayName: |
+      Lowest severity that fails the build. One of: critical, high, medium,
+      low, info, none. 'none' makes the step purely informational.
+    type: string
+    default: critical
+  - name: htmlOutputPath
+    displayName: |
+      Path the HTML findings report is written to. The file is also published
+      as a pipeline artifact named `htmlArtifactName`.
+    type: string
+    default: '$(Build.ArtifactStagingDirectory)/dt-findings.html'
+  - name: htmlArtifactName
+    displayName: Pipeline artifact name used to publish the HTML report.
+    type: string
+    default: dt-findings
+  - name: commentOnPr
+    displayName: |
+      Post / update an ADO PR comment with the summary when the build is a PR
+      build. No-op when System.PullRequest.PullRequestId isn't set.
+    type: boolean
+    default: true
+  - name: adoAccessToken
+    displayName: |
+      ADO token with PR-thread write scope. Defaults to System.AccessToken,
+      which works when the build identity has Contribute to PR rights.
+    type: string
+    default: $(System.AccessToken)
+  - name: commentMarker
+    displayName: HTML-comment marker used to find the prior bot thread for upsert.
+    type: string
+    default: '<!-- dt-pr-gate -->'
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: Dependency-Track findings gate
+  - name: condition
+    displayName: Optional ADO condition expression. Empty means default (succeeded()).
+    type: string
+    default: ''
+
+steps:
+  - pwsh: |
+      $params = @{
+        ServerUrl       = $env:DT_SERVER_URL
+        ApiKey          = $env:DT_API_KEY
+        ProjectName     = $env:DT_PROJECT_NAME
+        ProjectVersion  = $env:DT_PROJECT_VER
+        FailOnSeverity  = $env:DT_FAIL_ON
+        CommentMarker   = $env:DT_COMMENT_MARK
+        OutputHtmlPath  = $env:DT_HTML_OUT
+        # Build summary link: ADO publishes the artifact to the build's
+        # artifacts pane, which the PR sidebar links to. Build URL is enough.
+        ArtifactRunUrl  = "$($env:SYSTEM_COLLECTIONURI.TrimEnd('/'))/$env:SYSTEM_TEAMPROJECT/_build/results?buildId=$env:BUILD_BUILDID&view=artifacts&type=publishedArtifacts"
+      }
+      $prId = $env:SYSTEM_PULLREQUEST_PULLREQUESTID
+      if ($env:DT_COMMENT_ON_PR -eq 'true' -and $prId) {
+        $params.AdoCollectionUri = $env:SYSTEM_COLLECTIONURI
+        $params.AdoProjectId     = $env:SYSTEM_TEAMPROJECTID
+        $params.AdoRepoId        = $env:BUILD_REPOSITORY_ID
+        $params.AdoPrId          = $prId
+        $params.AdoAccessToken   = $env:DT_ADO_TOKEN
+      }
+      & "${{ parameters.scriptsDir }}/dependency-track/Get-DTFindingsAndGate.ps1" @params
+    env:
+      DT_SERVER_URL:    ${{ parameters.serverUrl }}
+      DT_API_KEY:       ${{ parameters.apiKey }}
+      DT_PROJECT_NAME:  ${{ parameters.projectName }}
+      DT_PROJECT_VER:   ${{ parameters.projectVersion }}
+      DT_FAIL_ON:       ${{ parameters.failOnSeverity }}
+      DT_COMMENT_MARK:  ${{ parameters.commentMarker }}
+      DT_HTML_OUT:      ${{ parameters.htmlOutputPath }}
+      DT_COMMENT_ON_PR: ${{ parameters.commentOnPr }}
+      DT_ADO_TOKEN:     ${{ parameters.adoAccessToken }}
+    displayName: ${{ parameters.displayName }}
+    ${{ if ne(parameters.condition, '') }}:
+      condition: ${{ parameters.condition }}
+
+  # Always publish, even on gate failure, so reviewers can pull the report
+  # when investigating a tripped gate.
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish HTML findings report'
+    condition: always()
+    inputs:
+      targetPath: ${{ parameters.htmlOutputPath }}
+      artifactName: ${{ parameters.htmlArtifactName }}
+      publishLocation: pipeline

@@ -57,6 +57,22 @@ so a single file is sufficient for distribution as a workflow artifact.
 .PARAMETER ArtifactRunUrl
 Optional URL to surface in the PR comment as "Download full report". Usually
 the workflow run page that will hold the uploaded HTML artifact.
+
+.PARAMETER AdoCollectionUri
+Azure DevOps organisation collection URI (e.g. "https://dev.azure.com/Hoobi/").
+Required when AdoProjectId + AdoRepoId + AdoPrId are set for ADO PR commenting.
+
+.PARAMETER AdoProjectId
+Azure DevOps project ID or name.
+
+.PARAMETER AdoRepoId
+Azure DevOps Git repository ID.
+
+.PARAMETER AdoPrId
+Azure DevOps pull request id to comment on.
+
+.PARAMETER AdoAccessToken
+Azure DevOps System.AccessToken or PAT with PR-comment write scope.
 #>
 [CmdletBinding()]
 param(
@@ -70,7 +86,12 @@ param(
     [Parameter(Mandatory = $false)] [string]$GithubToken,
     [Parameter(Mandatory = $false)] [string]$CommentMarker = '<!-- dt-pr-gate -->',
     [Parameter(Mandatory = $false)] [string]$OutputHtmlPath,
-    [Parameter(Mandatory = $false)] [string]$ArtifactRunUrl
+    [Parameter(Mandatory = $false)] [string]$ArtifactRunUrl,
+    [Parameter(Mandatory = $false)] [string]$AdoCollectionUri,
+    [Parameter(Mandatory = $false)] [string]$AdoProjectId,
+    [Parameter(Mandatory = $false)] [string]$AdoRepoId,
+    [Parameter(Mandatory = $false)] [string]$AdoPrId,
+    [Parameter(Mandatory = $false)] [string]$AdoAccessToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -350,7 +371,57 @@ if ($PrNumber -and $RepoName -and $GithubToken) {
     }
 }
 elseif ($PrNumber -or $RepoName -or $GithubToken) {
-    Write-Warning 'PR comment skipped: pr-number, repo, and github-token must all be supplied.'
+    Write-Warning 'GitHub PR comment skipped: pr-number, repo, and github-token must all be supplied.'
+}
+
+# Optional Azure DevOps PR thread upsert. Marker text is embedded so re-runs
+# update the same thread rather than stacking new ones.
+if ($AdoCollectionUri -and $AdoProjectId -and $AdoRepoId -and $AdoPrId -and $AdoAccessToken) {
+    $body = "$summary`n`n$CommentMarker"
+    $baseUri = $AdoCollectionUri.TrimEnd('/') + "/$AdoProjectId/_apis/git/repositories/$AdoRepoId/pullRequests/$AdoPrId"
+    # ADO accepts either Bearer (PAT or System.AccessToken from oauth) or Basic
+    # with empty username + PAT. Bearer works for System.AccessToken; PATs need
+    # Basic auth. Try Bearer first; fall back to Basic on 401.
+    $headers = @{
+        Authorization = "Bearer $AdoAccessToken"
+        Accept        = 'application/json'
+    }
+    try {
+        $threadList = Invoke-RestMethod -Uri "$baseUri/threads?api-version=7.1" -Headers $headers -Method Get
+    }
+    catch {
+        if ($_.Exception.Response.StatusCode.value__ -eq 401) {
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$AdoAccessToken"))
+            $headers.Authorization = "Basic $b64"
+            $threadList = Invoke-RestMethod -Uri "$baseUri/threads?api-version=7.1" -Headers $headers -Method Get
+        }
+        else { throw }
+    }
+
+    $existingThread = @($threadList.value | Where-Object {
+        $_.comments -and ($_.comments[0].content -like "*$CommentMarker*")
+    })[0]
+
+    if ($existingThread) {
+        $commentId = $existingThread.comments[0].id
+        $patchUri = "$baseUri/threads/$($existingThread.id)/comments/$commentId" + '?api-version=7.1'
+        Invoke-RestMethod -Uri $patchUri -Headers $headers -Method Patch `
+            -Body (@{ content = $body; commentType = 1 } | ConvertTo-Json -Compress) `
+            -ContentType 'application/json' | Out-Null
+        Write-Information "Updated existing ADO PR comment in thread $($existingThread.id)" -InformationAction Continue
+    }
+    else {
+        $postUri = "$baseUri/threads?api-version=7.1"
+        $payload = @{
+            comments = @(@{ parentCommentId = 0; content = $body; commentType = 1 })
+            status   = 1
+        } | ConvertTo-Json -Depth 5 -Compress
+        Invoke-RestMethod -Uri $postUri -Headers $headers -Method Post -Body $payload -ContentType 'application/json' | Out-Null
+        Write-Information 'Posted new ADO PR comment thread' -InformationAction Continue
+    }
+}
+elseif ($AdoCollectionUri -or $AdoProjectId -or $AdoRepoId -or $AdoPrId -or $AdoAccessToken) {
+    Write-Warning 'ADO PR comment skipped: ado-collection-uri, ado-project-id, ado-repo-id, ado-pr-id, and ado-access-token must all be supplied.'
 }
 
 # Emit GitHub outputs.
