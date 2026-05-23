@@ -229,11 +229,14 @@ if ($OutputHtmlPath) {
     $statusLabel = if ($gateTripped) { "GATE TRIPPED ($FailOnSeverity+)" } elseif ($totalCount -gt 0) { 'FINDINGS PRESENT' } else { 'CLEAN' }
     $generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss \U\T\C')
 
-    $countCards = foreach ($s in $severityOrder) {
+    $countCards = @(foreach ($s in $severityOrder) {
         if ($counts[$s] -gt 0) {
             $cls = Get-SevClass $s
             "<div class='count-card $cls'><span class='count-num'>$($counts[$s])</span><span class='count-label'>$(Escape-Html $s)</span></div>"
         }
+    })
+    if ($countCards.Count -eq 0) {
+        $countCards = @("<div class='count-card sev-info'><span class='count-num'>0</span><span class='count-label'>findings</span></div>")
     }
 
     $tableRows = foreach ($f in $sortedFindings) {
@@ -335,7 +338,7 @@ $($tableRows -join "`n")
   </header>
   <main>
     <section class='counts'>
-$([string]::Join("`n", $countCards))
+$($countCards -join "`n")
     </section>
     $tableHtml
   </main>
