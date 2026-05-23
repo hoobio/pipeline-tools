@@ -80,6 +80,15 @@ Pinned dotnet CycloneDX tool version.
 .PARAMETER CycloneDxCliImage
 Docker image used to run cyclonedx-cli merge when both scans run.
 
+.PARAMETER ScanGithubActionsPath
+Optional directory containing the consumer's own GitHub Actions workflows
+(typically `.github/workflows`). When set, a separate Syft scan is run against
+this path with only the github-actions catalogers enabled, and the result is
+merged into the final BOM. The OS / image scan disables those same catalogers
+to prevent transitive `uses:` refs scraped from upstream package workflow files
+(e.g. `node_modules/.../.github/workflows/*.yml`) leaking into the BOM. Empty
+to skip the GitHub Actions BOM.
+
 .PARAMETER OutputPath
 Destination path for the final BOM file (JSON).
 
@@ -148,6 +157,9 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$CycloneDxCliImage = 'cyclonedx/cyclonedx-cli:0.32.0',
 
+    [Parameter(Mandatory = $false)]
+    [string]$ScanGithubActionsPath = '',
+
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$OutputPath
@@ -197,12 +209,25 @@ function Invoke-SyftScan {
 
     Write-Information "Generating container BOM for $Image via anchore/syft:$SyftVersion" -InformationAction Continue
 
+    # The github-actions catalogers walk every workflow YAML in the image
+    # filesystem, which sweeps up transitive `uses:` refs from upstream
+    # packages' bundled `.github/workflows/` (e.g. node_modules/@fastify/*).
+    # Those refs are not actions this image runs - they belong in a separate,
+    # consumer-scoped github-actions scan via -ScanGithubActionsPath. Strip
+    # them here to keep the container BOM focused on OS + filesystem
+    # packages.
+    #
+    # Also strip the `file` tag: when CycloneDX output is selected syft
+    # auto-adds file-cataloger, which then emits a duplicate `type: file`
+    # component for every package.json (e.g. /node_modules/.pnpm/zod@.../
+    # package.json next to the real `pkg:npm/zod@...` library entry).
     & docker run --rm `
         -v '/var/run/docker.sock:/var/run/docker.sock' `
         -v "${outDir}:/out" `
         -w /out `
         "anchore/syft:$SyftVersion" `
         $Image `
+        --select-catalogers '-github-actions-usage-cataloger,-github-action-workflow-usage-cataloger,-file' `
         -o "cyclonedx-json=$outFile"
 
     if ($LASTEXITCODE -ne 0) {
@@ -215,10 +240,15 @@ function Invoke-SyftScan {
 }
 
 function Invoke-SyftDirScan {
+    # Catalogers, when set, replaces the default cataloger set entirely so the
+    # scan only emits components from those specific catalogers. Used to keep
+    # lockfile scans (bun, pnpm) from also walking node_modules, .github, and
+    # the rest of the source tree.
     param(
         [Parameter(Mandatory)] [string]$DirPath,
         [Parameter(Mandatory)] [string]$OutputPath,
-        [Parameter(Mandatory)] [string]$SyftVersion
+        [Parameter(Mandatory)] [string]$SyftVersion,
+        [Parameter(Mandatory = $false)] [string]$Catalogers = ''
     )
     Assert-DockerAvailable
 
@@ -227,14 +257,26 @@ function Invoke-SyftDirScan {
     $outDir    = Split-Path -Path $absOutput -Parent
     $outFile   = Split-Path -Path $absOutput -Leaf
 
-    Write-Information "Generating directory BOM for $absDir via anchore/syft:$SyftVersion" -InformationAction Continue
+    $catalogerNote = if ($Catalogers) { " (catalogers: $Catalogers)" } else { '' }
+    Write-Information "Generating directory BOM for $absDir via anchore/syft:$SyftVersion$catalogerNote" -InformationAction Continue
 
-    & docker run --rm `
-        -v "${absDir}:/work:ro" `
-        -v "${outDir}:/out" `
-        "anchore/syft:$SyftVersion" `
-        'dir:/work' `
-        -o "cyclonedx-json=/out/$outFile"
+    $dockerArgs = @(
+        'run', '--rm',
+        '-v', "${absDir}:/work:ro",
+        '-v', "${outDir}:/out",
+        "anchore/syft:$SyftVersion",
+        'dir:/work'
+    )
+    if ($Catalogers) {
+        $dockerArgs += @('--override-default-catalogers', $Catalogers)
+    }
+    # Suppress the file cataloger: when CycloneDX output is requested syft
+    # auto-adds it to the selection, which emits a duplicate type=file
+    # component per package.json next to the real library entry.
+    $dockerArgs += @('--select-catalogers', '-file')
+    $dockerArgs += @('-o', "cyclonedx-json=/out/$outFile")
+
+    & docker @dockerArgs
 
     if ($LASTEXITCODE -ne 0) {
         throw "Syft directory scan failed for '$absDir' (exit $LASTEXITCODE)"
@@ -243,6 +285,54 @@ function Invoke-SyftDirScan {
         throw "Syft did not produce expected output at '$absOutput'"
     }
     Repair-OutputPermission -Path $absOutput
+}
+
+function Invoke-GithubActionsScan {
+    # Scan a directory of GitHub Actions workflow YAML (typically
+    # .github/workflows) for `uses:` refs. Only the github-actions catalogers
+    # run so we don't pull in npm packages / files from the same tree.
+    #
+    # syft's github-actions-usage-cataloger only matches files whose path
+    # contains `.github/workflows/`. When the caller hands us
+    # `<repo>/.github/workflows` directly, we have to remount it under that
+    # exact subpath inside the syft container or the cataloger silently
+    # produces an empty BOM. Mounting at `/work/.github/workflows` and
+    # scanning `dir:/work` keeps the heuristic happy.
+    param(
+        [Parameter(Mandatory)] [string]$DirPath,
+        [Parameter(Mandatory)] [string]$OutputPath,
+        [Parameter(Mandatory)] [string]$SyftVersion
+    )
+    Assert-DockerAvailable
+
+    if (-not (Test-Path -LiteralPath $DirPath -PathType Container)) {
+        Write-Warning "ScanGithubActionsPath '$DirPath' is not a directory; skipping GitHub Actions scan."
+        return $false
+    }
+
+    $absDir    = (Resolve-Path -LiteralPath $DirPath).Path
+    $absOutput = [System.IO.Path]::GetFullPath($OutputPath)
+    $outDir    = Split-Path -Path $absOutput -Parent
+    $outFile   = Split-Path -Path $absOutput -Leaf
+
+    Write-Information "Generating GitHub Actions BOM from $absDir via anchore/syft:$SyftVersion (mounted at .github/workflows so the cataloger matches)" -InformationAction Continue
+
+    & docker run --rm `
+        -v "${absDir}:/work/.github/workflows:ro" `
+        -v "${outDir}:/out" `
+        "anchore/syft:$SyftVersion" `
+        'dir:/work' `
+        --override-default-catalogers 'github-actions-usage-cataloger,github-action-workflow-usage-cataloger' `
+        -o "cyclonedx-json=/out/$outFile"
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Syft GitHub Actions scan failed for '$absDir' (exit $LASTEXITCODE)"
+    }
+    if (-not (Test-Path -LiteralPath $absOutput)) {
+        throw "Syft did not produce expected output at '$absOutput'"
+    }
+    Repair-OutputPermission -Path $absOutput
+    return $true
 }
 
 function Invoke-PythonScan {
@@ -319,14 +409,42 @@ function Invoke-NodeScan {
 
     $absManifest = (Resolve-Path -LiteralPath $ManifestPath).Path
 
-    # cyclonedx-npm doesn't understand bun's lockfile (neither the binary
-    # bun.lockb nor the JSON bun.lock format introduced in bun 1.2). Syft
-    # does, so route bun projects through a directory scan when detected.
-    $hasBunLockfile = (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lock')) -or
+    # cyclonedx-npm only reads package-lock.json. For lockfiles it doesn't
+    # understand (bun.lock, pnpm-lock.yaml) we route through Syft, pinned to
+    # the javascript-lock-cataloger so the scan reads only the lockfile and
+    # doesn't also walk node_modules, .github, dist, etc. - which would
+    # otherwise pull in workflow files from transitive packages and our own
+    # source artefacts.
+    #
+    # If the manifest path has no lockfile but does have a node_modules
+    # directory, we treat it as a deploy tree (e.g. the output of
+    # `pnpm deploy --prod`) and use javascript-package-cataloger, which
+    # reads each node_modules/<pkg>/package.json. This is the right
+    # cataloger for "what's actually installed" snapshots, and for
+    # `--prod` deploy outputs it produces a prod-only component list.
+    #
+    # Caveat: as of syft v1.44 the javascript-lock-cataloger reads
+    # pnpm-lock.yaml, yarn.lock, package-lock.json - but NOT bun.lock. Bun
+    # projects scanned here will produce an empty BOM until upstream syft
+    # adds bun support. Consumers on bun should migrate to pnpm for accurate
+    # SBOM coverage.
+    $hasBunLockfile  = (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lock')) -or
                       (Test-Path -LiteralPath (Join-Path $absManifest 'bun.lockb'))
+    $hasPnpmLockfile = Test-Path -LiteralPath (Join-Path $absManifest 'pnpm-lock.yaml')
+    $hasNodeModules  = Test-Path -LiteralPath (Join-Path $absManifest 'node_modules') -PathType Container
     if ($hasBunLockfile) {
-        Write-Information "Detected bun lockfile in $absManifest; scanning via anchore/syft:$SyftVersion" -InformationAction Continue
-        Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion
+        Write-Warning "Detected bun lockfile in $absManifest. syft v1.x does not parse bun.lock / bun.lockb; the resulting application BOM will be empty. Migrate to pnpm for accurate node-package coverage."
+        Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion -Catalogers 'javascript-lock-cataloger'
+        return
+    }
+    if ($hasPnpmLockfile) {
+        Write-Information "Detected pnpm lockfile in $absManifest; scanning via anchore/syft:$SyftVersion (javascript-lock-cataloger only)" -InformationAction Continue
+        Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion -Catalogers 'javascript-lock-cataloger'
+        return
+    }
+    if ($hasNodeModules) {
+        Write-Information "No lockfile in $absManifest but node_modules present; treating as a deploy tree and scanning with javascript-package-cataloger" -InformationAction Continue
+        Invoke-SyftDirScan -DirPath $absManifest -OutputPath $OutputPath -SyftVersion $SyftVersion -Catalogers 'javascript-package-cataloger'
         return
     }
 
@@ -425,6 +543,19 @@ function Invoke-CycloneDxMerge {
     Assert-DockerAvailable
 
     Write-Information "Merging $($Inputs.Count) BOMs via $CliImage" -InformationAction Continue
+    # Surface each input's component count before merging - cyclonedx-cli's
+    # own log only prints "Contains N" for the first input, then "Total N"
+    # for the merged result, which makes per-input regressions invisible.
+    foreach ($i in $Inputs) {
+        try {
+            $bom = Get-Content -LiteralPath $i -Raw | ConvertFrom-Json
+            $count = if ($bom.components) { @($bom.components).Count } else { 0 }
+            Write-Information "  input '$([IO.Path]::GetFileName($i))': $count components" -InformationAction Continue
+        }
+        catch {
+            Write-Warning "  input '$i' failed to parse: $($_.Exception.Message)"
+        }
+    }
 
     $stagingDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ([guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
@@ -476,8 +607,8 @@ function Invoke-CycloneDxMerge {
 
 # ----- main -----
 
-if (-not $Image -and $AppLanguage -eq 'none') {
-    throw 'Specify at least one of -Image (container scan) or -AppLanguage (application scan). Both can be specified together; their BOMs are merged.'
+if (-not $Image -and $AppLanguage -eq 'none' -and -not $ScanGithubActionsPath) {
+    throw 'Specify at least one of -Image (container scan), -AppLanguage (application scan), or -ScanGithubActionsPath (workflows scan). Their BOMs are merged when more than one is set.'
 }
 
 if ($AppLanguage -ne 'none' -and -not $AppManifestPath) {
@@ -493,8 +624,9 @@ $workDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ([guid]:
 New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 
 try {
-    $containerBomPath = $null
-    $appBomPath       = $null
+    $containerBomPath     = $null
+    $appBomPath           = $null
+    $githubActionsBomPath = $null
 
     if ($Image) {
         $containerBomPath = Join-Path -Path $workDir -ChildPath 'container.cdx.json'
@@ -520,17 +652,27 @@ try {
         }
     }
 
-    # Final output selection. Container first in the merge so the application BOM's
-    # metadata wins on DT-side dedupe (last-write-wins by purl).
-    if ($containerBomPath -and $appBomPath) {
-        Invoke-CycloneDxMerge -Inputs @($containerBomPath, $appBomPath) `
+    if ($ScanGithubActionsPath) {
+        $ghBomCandidate = Join-Path -Path $workDir -ChildPath 'github-actions.cdx.json'
+        $produced = Invoke-GithubActionsScan `
+            -DirPath $ScanGithubActionsPath `
+            -OutputPath $ghBomCandidate `
+            -SyftVersion $SyftVersion
+        if ($produced) { $githubActionsBomPath = $ghBomCandidate }
+    }
+
+    # Merge order: container first, then app, then github-actions. cyclonedx-cli
+    # merges in input order; downstream consumers that dedupe by purl
+    # (Dependency-Track) treat the last-written metadata as authoritative, so
+    # placing the lockfile and github-actions scans after the container scan
+    # gives them precedence for shared components.
+    $inputs = @($containerBomPath, $appBomPath, $githubActionsBomPath) | Where-Object { $_ }
+    if ($inputs.Count -gt 1) {
+        Invoke-CycloneDxMerge -Inputs $inputs `
             -OutputPath $OutputPath -CliImage $CycloneDxCliImage
     }
-    elseif ($containerBomPath) {
-        Copy-Item -Path $containerBomPath -Destination $OutputPath -Force
-    }
-    elseif ($appBomPath) {
-        Copy-Item -Path $appBomPath -Destination $OutputPath -Force
+    elseif ($inputs.Count -eq 1) {
+        Copy-Item -Path $inputs[0] -Destination $OutputPath -Force
     }
 
     if (-not (Test-Path -LiteralPath $OutputPath)) {
