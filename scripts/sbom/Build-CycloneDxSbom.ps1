@@ -111,7 +111,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$SyftVersion = 'v1.40.1',
+    [string]$SyftVersion = 'v1.44.0',
 
     [Parameter(Mandatory = $false)]
     [ValidateSet('none', 'python', 'node', 'dotnet')]
@@ -122,15 +122,15 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$PythonImage = 'python:3.12-slim',
+    [string]$PythonImage = 'python:3.13-slim',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$CycloneDxPyVersion = '5.3.0',
+    [string]$CycloneDxPyVersion = '7.3.0',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$NodeImage = 'node:20-alpine',
+    [string]$NodeImage = 'node:22-alpine',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
@@ -142,11 +142,11 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$DotnetToolVersion = '6.1.1',
+    [string]$DotnetToolVersion = '6.2.0',
 
     [Parameter(Mandatory = $false)]
     [ValidateNotNullOrEmpty()]
-    [string]$CycloneDxCliImage = 'cyclonedx/cyclonedx-cli:0.27.2',
+    [string]$CycloneDxCliImage = 'cyclonedx/cyclonedx-cli:0.32.0',
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]

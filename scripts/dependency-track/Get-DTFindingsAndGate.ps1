@@ -98,6 +98,19 @@ $ErrorActionPreference = 'Stop'
 
 $invokeRest = Join-Path -Path $PSScriptRoot -ChildPath 'private/Invoke-DTRestMethod.ps1'
 
+# Write a placeholder HTML up front so downstream PublishPipelineArtifact /
+# upload-artifact steps never trip on a missing file when the script throws
+# (e.g. lookup 404). The placeholder gets overwritten with the real report at
+# the end of the script when everything succeeds.
+if ($OutputHtmlPath) {
+    $placeholderDir = Split-Path -Path ([System.IO.Path]::GetFullPath($OutputHtmlPath)) -Parent
+    if ($placeholderDir -and -not (Test-Path -LiteralPath $placeholderDir)) {
+        New-Item -Path $placeholderDir -ItemType Directory -Force | Out-Null
+    }
+    $placeholderHtml = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>DT findings (pending)</title></head><body style='font-family:sans-serif;padding:2rem;color:#888'><h2>Dependency-Track findings report</h2><p>Report generation did not complete. Check the pipeline logs for the underlying error.</p></body></html>"
+    Set-Content -LiteralPath $OutputHtmlPath -Value $placeholderHtml -Encoding UTF8
+}
+
 # Look up project UUID.
 $lookup = & $invokeRest `
     -ServerUrl $ServerUrl `
