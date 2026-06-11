@@ -666,7 +666,11 @@ try {
     # (Dependency-Track) treat the last-written metadata as authoritative, so
     # placing the lockfile and github-actions scans after the container scan
     # gives them precedence for shared components.
-    $inputs = @($containerBomPath, $appBomPath, $githubActionsBomPath) | Where-Object { $_ }
+    # Wrap the whole pipeline in @() so a single surviving input stays an array.
+    # Without it, `@(...) | Where-Object` unwraps to a scalar string, and the
+    # single-input branch below then indexes $inputs[0] into the first *character*
+    # of the path ("C" from "C:\...") - which broke dotnet-only runs on Windows.
+    $inputs = @(@($containerBomPath, $appBomPath, $githubActionsBomPath) | Where-Object { $_ })
     if ($inputs.Count -gt 1) {
         Invoke-CycloneDxMerge -Inputs $inputs `
             -OutputPath $OutputPath -CliImage $CycloneDxCliImage
