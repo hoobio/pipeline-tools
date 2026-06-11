@@ -247,7 +247,7 @@ runs:
 
     - name: Generate CycloneDX BOM
       if: inputs.bom-path == ''
-      uses: hoobio/pipeline-tools/pipeline/github/step/build-cyclonedx-sbom@v2.3.0 # x-release-please-version
+      uses: hoobio/pipeline-tools/pipeline/github/step/build-cyclonedx-sbom@v2.3.1 # x-release-please-version
       with:
         image:                 ${{ inputs.image }}
         syft-version:          ${{ inputs.syft-version }}
@@ -315,7 +315,7 @@ runs:
         overwrite: true
 
     - name: Bootstrap Dependency-Track hierarchy
-      uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@v2.3.0 # x-release-please-version
+      uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@v2.3.1 # x-release-please-version
       with:
         server-url:     ${{ inputs.server-url }}
         api-key:        ${{ inputs.api-key }}

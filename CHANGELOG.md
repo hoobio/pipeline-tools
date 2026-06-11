@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/hoobio/pipeline-tools/compare/v2.3.0...v2.3.1) (2026-06-11)
+
+
+### Bug Fixes
+
+* **sbom:** keep Windows single-input generation working and pin DT-upload sub-step refs ([41094b2](https://github.com/hoobio/pipeline-tools/commit/41094b2d60a1568961469dd6bbfb38c6b9591cfe))
+
 ## [2.3.0](https://github.com/hoobio/pipeline-tools/compare/v2.2.1...v2.3.0) (2026-05-23)
 
 
