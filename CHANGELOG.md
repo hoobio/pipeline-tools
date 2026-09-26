@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.2](https://github.com/hoobio/pipeline-tools/compare/v2.3.1...v2.3.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* pass client-id instead of deprecated app-id to create-github-app-token ([19c496b](https://github.com/hoobio/pipeline-tools/commit/19c496bd70b29d99f3b78f5d757266c8d0bf9f07))
+
 ## [2.3.1](https://github.com/hoobio/pipeline-tools/compare/v2.3.0...v2.3.1) (2026-06-11)
 
 
