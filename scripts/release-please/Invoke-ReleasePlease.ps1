@@ -117,7 +117,7 @@ function Invoke-ReleasePleaseCommand {
 $repoName = $Repository.Split('/')[1]
 
 try {
-    $jwt = Get-GitHubAppJwt-AppId $AppId -PrivateKey $AppPrivateKey
+    $jwt = Get-GitHubAppJwt -AppId $AppId -PrivateKey $AppPrivateKey
 }
 catch {
     throw "Could not sign the GitHub App JWT; check the private key is PEM text: $($_.Exception.Message)"
