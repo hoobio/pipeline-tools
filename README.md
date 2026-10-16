@@ -17,6 +17,7 @@ pipeline/
       dt/send-bom.yaml                           # Upload a BOM to DT (returns masked uploadToken)
       dt/set-project-latest.yaml                 # Mark project as isLatest = true
       dt/remove-stale-children.yaml              # Delete old children, keep N most recent
+      release-please/release-please.yaml         # Run release-please with a GitHub App token
     job/
       upload-sbom-to-dependency-track.yaml       # .NET-flavoured job (checkout + UseDotNet@2 + build + upload)
   github/
@@ -40,6 +41,8 @@ scripts/
     Set-DTProjectLatest.ps1                      # Mark isLatest
     Remove-DTStaleChildren.ps1                   # Prune children
     Wait-DTBomProcessing.ps1                     # Poll for processing
+  release-please/
+    Invoke-ReleasePlease.ps1                     # GitHub App token + release-please github-release / release-pr
 .github/
   workflows/                                     # Repo's own CI (lint, validate)
 ```
@@ -335,6 +338,46 @@ The job template currently scans .NET only; container/python/node consumers shou
 
 For fine-grained control, the step templates under `pipeline/ado/templates/step/` are usable in isolation. Each declares its inputs explicitly and is documented inline.
 
+### release-please
+
+Runs release-please from an Azure DevOps pipeline, authenticated as a GitHub App so the release PR it opens triggers downstream CI. The App needs `contents`, `pull-requests` and `issues` write access on the target repository. Store the App private key (PEM) as a secret variable.
+
+The repository must already have the tag for the version in its `.release-please-manifest.json` (for example `v1.2.3` for `1.2.3`). Unlike the GitHub action, the ADO step does not create it.
+
+```yaml
+resources:
+  repositories:
+    - repository: pipeline_tools
+      type: github
+      name: hoobio/pipeline-tools
+      ref: refs/tags/v2.0.0
+      endpoint: hoobio  # ADO GitHub service connection name
+
+trigger:
+  branches:
+    include: [main]
+
+jobs:
+  - job: release_please
+    pool:
+      name: my-pool
+    steps:
+      - checkout: none
+      - checkout: pipeline_tools
+        path: s/pipeline_tools
+
+      - template: pipeline/ado/templates/step/release-please/release-please.yaml@pipeline_tools
+        parameters:
+          scriptsDir:    $(Build.SourcesDirectory)/pipeline_tools/scripts
+          appId:         $(release-please-app-id)
+          appPrivateKey: $(release-please-app-private-key)
+          repository:    my-org/my-repo
+```
+
+`repository` defaults to `$(Build.Repository.Name)`, which is `owner/name` for a GitHub repository resource. With `checkout: none` for the repository itself, release-please works through the GitHub API and needs no local clone.
+
+The GitHub action `pipeline/github/step/release-please` still wraps `googleapis/release-please-action` and does not call `Invoke-ReleasePlease.ps1` yet.
+
 ## PowerShell scripts
 
 The composite actions are thin shells over PowerShell scripts in `scripts/`. The scripts are independently usable from any PowerShell 7+ context.
@@ -348,6 +391,7 @@ The composite actions are thin shells over PowerShell scripts in `scripts/`. The
 | [`scripts/dependency-track/Set-DTProjectLatest.ps1`](scripts/dependency-track/Set-DTProjectLatest.ps1) | Mark a project version as `isLatest = true`. |
 | [`scripts/dependency-track/Remove-DTStaleChildren.ps1`](scripts/dependency-track/Remove-DTStaleChildren.ps1) | Prune old child projects under a parent. |
 | [`scripts/dependency-track/Wait-DTBomProcessing.ps1`](scripts/dependency-track/Wait-DTBomProcessing.ps1) | Poll DT until a BOM upload finishes processing, or fail on timeout. |
+| [`scripts/release-please/Invoke-ReleasePlease.ps1`](scripts/release-please/Invoke-ReleasePlease.ps1) | Mint a GitHub App installation token, then run `release-please github-release` and `release-pr` at a pinned version, one retry each. |
 
 Private (internal) helper:
 
