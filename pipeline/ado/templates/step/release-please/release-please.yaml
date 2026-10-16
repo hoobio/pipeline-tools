@@ -1,0 +1,71 @@
+# Run release-please (github-release, then release-pr) with a GitHub App token.
+#
+# Wraps scripts/release-please/Invoke-ReleasePlease.ps1. The repository must have its
+# manifest-version tag before the first run.
+
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+  - name: appId
+    displayName: GitHub App ID.
+    type: string
+  - name: appPrivateKey
+    displayName: GitHub App private key (PEM). Mark the source variable as a secret.
+    type: string
+  - name: repository
+    displayName: Target repository as owner/name.
+    type: string
+    default: $(Build.Repository.Name)
+  - name: releasePleaseVersion
+    displayName: Exact release-please npm version.
+    type: string
+    default: 17.11.2
+  - name: configFile
+    displayName: Path to release-please-config.json.
+    type: string
+    default: release-please-config.json
+  - name: manifestFile
+    displayName: Path to .release-please-manifest.json.
+    type: string
+    default: .release-please-manifest.json
+  - name: targetBranch
+    displayName: Branch to tag releases on and open release PRs against.
+    type: string
+    default: main
+  - name: timeoutInMinutes
+    displayName: Step timeout in minutes.
+    type: number
+    default: 10
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: Run release-please
+  - name: condition
+    displayName: Optional ADO condition expression. Empty means always run on success.
+    type: string
+    default: ''
+
+steps:
+  - pwsh: |
+      $key = ConvertTo-SecureString -String $env:RP_APP_PRIVATE_KEY -AsPlainText -Force
+      & "${{ parameters.scriptsDir }}/release-please/Invoke-ReleasePlease.ps1" `
+        -AppId                $env:RP_APP_ID `
+        -AppPrivateKey        $key `
+        -Repository           $env:RP_REPOSITORY `
+        -ReleasePleaseVersion $env:RP_VERSION `
+        -ConfigFile           $env:RP_CONFIG_FILE `
+        -ManifestFile         $env:RP_MANIFEST_FILE `
+        -TargetBranch         $env:RP_TARGET_BRANCH
+    env:
+      RP_APP_ID:          ${{ parameters.appId }}
+      RP_APP_PRIVATE_KEY: ${{ parameters.appPrivateKey }}
+      RP_REPOSITORY:      ${{ parameters.repository }}
+      RP_VERSION:         ${{ parameters.releasePleaseVersion }}
+      RP_CONFIG_FILE:     ${{ parameters.configFile }}
+      RP_MANIFEST_FILE:   ${{ parameters.manifestFile }}
+      RP_TARGET_BRANCH:   ${{ parameters.targetBranch }}
+    displayName: ${{ parameters.displayName }}
+    timeoutInMinutes: ${{ parameters.timeoutInMinutes }}
+    ${{ if ne(parameters.condition, '') }}:
+      condition: ${{ parameters.condition }}
