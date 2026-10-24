@@ -247,7 +247,7 @@ runs:
 
     - name: Generate CycloneDX BOM
       if: inputs.bom-path == ''
-      uses: hoobio/pipeline-tools/pipeline/github/step/build-cyclonedx-sbom@v2.4.0 # x-release-please-version
+      uses: hoobio/pipeline-tools/pipeline/github/step/build-cyclonedx-sbom@353f3a7d09d9e63ae303631a4a4bb1ac83f97635 # v2.4.0 # x-release-please-version
       with:
         image:                 ${{ inputs.image }}
         syft-version:          ${{ inputs.syft-version }}
@@ -305,7 +305,7 @@ runs:
 
     - name: Upload BOM as workflow artifact
       if: inputs.upload-artifact == 'true'
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: ${{ steps.paths.outputs.artifact }}
         path: ${{ steps.paths.outputs.resolved }}
@@ -315,7 +315,7 @@ runs:
         overwrite: true
 
     - name: Bootstrap Dependency-Track hierarchy
-      uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@v2.4.0 # x-release-please-version
+      uses: hoobio/pipeline-tools/pipeline/github/step/dt-bootstrap-hierarchy@353f3a7d09d9e63ae303631a4a4bb1ac83f97635 # v2.4.0 # x-release-please-version
       with:
         server-url:     ${{ inputs.server-url }}
         api-key:        ${{ inputs.api-key }}
