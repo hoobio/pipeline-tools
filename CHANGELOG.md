@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.1](https://github.com/hoobio/pipeline-tools/compare/v2.4.0...v2.4.1) (2026-10-24)
+
+
+### Miscellaneous Chores
+
+* **deps:** pin dependencies ([#45](https://github.com/hoobio/pipeline-tools/issues/45)) ([d38461c](https://github.com/hoobio/pipeline-tools/commit/d38461c4763cf817743dd0ec6eb313e7afab1254))
+* **deps:** update all major dependencies (major) ([#46](https://github.com/hoobio/pipeline-tools/issues/46)) ([5223c83](https://github.com/hoobio/pipeline-tools/commit/5223c838861d23000d5fa52f6e5dbe1873407a80))
+* enable Renovate and retire Dependabot version updates ([#39](https://github.com/hoobio/pipeline-tools/issues/39)) ([eb0aa4e](https://github.com/hoobio/pipeline-tools/commit/eb0aa4e730e430c46c06a4c5df4662d92497776b))
+
 ## [2.4.0](https://github.com/hoobio/pipeline-tools/compare/v2.3.2...v2.4.0) (2026-10-16)
 
 
