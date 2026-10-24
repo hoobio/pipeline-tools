@@ -60,7 +60,7 @@ runs:
     # Idempotent: skipped when the tag already exists, or when the manifest
     # doesn't exist yet (first-run bootstrap before release-please ever ran).
     - name: Pre-create release tag if missing
-      uses: actions/github-script@v8
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
       env:
         MANIFEST_FILE: ${{ inputs.manifest-file }}
       with:
