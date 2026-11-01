@@ -1,0 +1,59 @@
+name: Authenticate dotnet to Azure DevOps NuGet feeds
+description: |
+  Signs in to Azure with GitHub OIDC (no PAT, no stored secret), gets an Azure DevOps access
+  token, and registers each feed as a dotnet NuGet source. Use before `dotnet restore`.
+
+  The job needs `permissions: id-token: write`. On a self-hosted runner, call
+  `ado-nuget-auth-cleanup` with `if: always()` at the end of the job.
+
+inputs:
+  azure-client-id:
+    description: Client ID of the Entra app registration that trusts this repository through a federated credential.
+    required: true
+  azure-tenant-id:
+    description: Entra tenant ID.
+    required: true
+  feed-url:
+    description: Newline-separated NuGet v3 index URLs on pkgs.dev.azure.com or *.pkgs.visualstudio.com.
+    required: true
+  source-name:
+    description: Name of the first NuGet source. Extra feeds are named `<source-name>-2`, `<source-name>-3`, and so on.
+    required: false
+    default: ado
+  config-file:
+    description: Path of an existing NuGet.Config to update. Empty means the user-level config.
+    required: false
+    default: ''
+  token-env-var:
+    description: Name of an environment variable to export the token to for later steps in the job. Empty means the token is not exported.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Azure login (OIDC)
+      uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Register NuGet sources
+      shell: pwsh
+      env:
+        FEED_URL: ${{ inputs.feed-url }}
+        SOURCE_NAME: ${{ inputs.source-name }}
+        CONFIG_FILE: ${{ inputs.config-file }}
+        TOKEN_ENV_VAR: ${{ inputs.token-env-var }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $plainToken = az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv
+        if ($LASTEXITCODE -ne 0 -or -not $plainToken) { throw 'az could not get an Azure DevOps access token' }
+        Write-Host "::add-mask::$plainToken"
+        $token = ConvertTo-SecureString -String $plainToken -AsPlainText -Force
+        $feeds = @($env:FEED_URL -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $params = @{ FeedUrl = $feeds; SourceName = $env:SOURCE_NAME; Token = $token }
+        if ($env:CONFIG_FILE) { $params.ConfigFile = $env:CONFIG_FILE }
+        & "$env:GITHUB_ACTION_PATH/../../../../scripts/nuget/Set-AdoNuGetSource.ps1" @params
+        if ($env:TOKEN_ENV_VAR) { Add-Content -Path $env:GITHUB_ENV -Value "$($env:TOKEN_ENV_VAR)=$plainToken" }
