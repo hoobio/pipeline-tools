@@ -1,0 +1,36 @@
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+  - name: feedUrl
+    displayName: Newline-separated NuGet v3 index URLs on pkgs.dev.azure.com or *.pkgs.visualstudio.com.
+    type: string
+  - name: sourceName
+    displayName: Name of the first NuGet source. Extra feeds are named <sourceName>-2, <sourceName>-3, and so on.
+    type: string
+    default: ado
+  - name: configFile
+    displayName: Path of an existing NuGet.Config to update. Empty means the user-level config.
+    type: string
+    default: ''
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: Authenticate dotnet to Azure DevOps NuGet feeds
+
+steps:
+  - pwsh: |
+      $feeds = @($env:FEED_URL -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+      $params = @{
+        FeedUrl    = $feeds
+        SourceName = $env:SOURCE_NAME
+        Token      = ConvertTo-SecureString -String $env:SYSTEM_ACCESSTOKEN -AsPlainText -Force
+      }
+      if ($env:CONFIG_FILE) { $params.ConfigFile = $env:CONFIG_FILE }
+      & "${{ parameters.scriptsDir }}/nuget/Set-AdoNuGetSource.ps1" @params
+    env:
+      FEED_URL:           ${{ parameters.feedUrl }}
+      SOURCE_NAME:        ${{ parameters.sourceName }}
+      CONFIG_FILE:        ${{ parameters.configFile }}
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+    displayName: ${{ parameters.displayName }}

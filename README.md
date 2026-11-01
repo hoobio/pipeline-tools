@@ -18,6 +18,8 @@ pipeline/
       dt/set-project-latest.yaml                 # Mark project as isLatest = true
       dt/remove-stale-children.yaml              # Delete old children, keep N most recent
       release-please/release-please.yaml         # Run release-please with a GitHub App token
+      nuget/ado-nuget-auth.yaml                  # Register Azure DevOps NuGet feeds with System.AccessToken
+      nuget/ado-nuget-auth-cleanup.yaml          # Remove those sources
     job/
       upload-sbom-to-dependency-track.yaml       # .NET-flavoured job (checkout + UseDotNet@2 + build + upload)
   github/
@@ -29,6 +31,8 @@ pipeline/
       dt-mark-latest/                            # Mark project as isLatest = true
       dt-prune-stale-children/                   # Delete old children
       dt-wait-bom-processing/                    # Poll until DT finishes processing the upload
+      ado-nuget-auth/                            # OIDC sign-in, then register Azure DevOps NuGet feeds
+      ado-nuget-auth-cleanup/                    # Remove those sources (self-hosted runners)
     job/
       upload-sbom-to-dependency-track/           # Orchestrating composite action (build + upload)
 scripts/
@@ -43,6 +47,9 @@ scripts/
     Wait-DTBomProcessing.ps1                     # Poll for processing
   release-please/
     Invoke-ReleasePlease.ps1                     # GitHub App token + release-please github-release / release-pr
+  nuget/
+    Set-AdoNuGetSource.ps1                       # Register Azure DevOps NuGet feeds as dotnet sources
+    Remove-AdoNuGetSource.ps1                    # Remove those sources again
 .github/
   workflows/                                     # Repo's own CI (lint, validate)
 ```
@@ -378,6 +385,63 @@ jobs:
 
 The GitHub action `pipeline/github/step/release-please` still wraps `googleapis/release-please-action` and does not call `Invoke-ReleasePlease.ps1` yet.
 
+### Azure DevOps NuGet feed authentication
+
+Lets `dotnet restore` read (or push to) an Azure DevOps Artifacts NuGet feed without a personal access token. Feed URLs must be on `pkgs.dev.azure.com` or `*.pkgs.visualstudio.com`. The scripts refuse any other host, so the token cannot go elsewhere.
+
+On GitHub, the action signs in with OIDC (OpenID Connect, a short-lived token exchange). The Entra app registration needs a federated credential for the repository, and must be a user in the Azure DevOps organisation with access to the feed. The job needs `permissions: id-token: write`.
+
+```yaml
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hoobio/pipeline-tools/pipeline/github/step/ado-nuget-auth@<tag-or-sha>
+        with:
+          azure-client-id: 00000000-0000-0000-0000-000000000000
+          azure-tenant-id: 11111111-1111-1111-1111-111111111111
+          feed-url: |
+            https://pkgs.dev.azure.com/example-org/_packaging/example-feed/nuget/v3/index.json
+          source-name: example
+
+      - run: dotnet restore
+
+      - if: always()
+        uses: hoobio/pipeline-tools/pipeline/github/step/ado-nuget-auth-cleanup@<tag-or-sha>
+        with:
+          source-name: example
+```
+
+Set `token-env-var` (for example `ADO_TOKEN`) to export the token to later steps, such as a Docker build secret. It is empty by default, and nothing is exported.
+
+On Azure DevOps, the template uses the pipeline's own `System.AccessToken`. The project build service identity needs read access to the feed.
+
+```yaml
+steps:
+  - checkout: self
+  - checkout: pipeline_tools
+    path: s/pipeline_tools
+
+  - template: pipeline/ado/templates/step/nuget/ado-nuget-auth.yaml@pipeline_tools
+    parameters:
+      scriptsDir: $(Build.SourcesDirectory)/pipeline_tools/scripts
+      feedUrl:    https://pkgs.dev.azure.com/example-org/_packaging/example-feed/nuget/v3/index.json
+      sourceName: example
+
+  - script: dotnet restore
+
+  - template: pipeline/ado/templates/step/nuget/ado-nuget-auth-cleanup.yaml@pipeline_tools
+    parameters:
+      scriptsDir: $(Build.SourcesDirectory)/pipeline_tools/scripts
+      sourceName: example
+```
+
 ## PowerShell scripts
 
 The composite actions are thin shells over PowerShell scripts in `scripts/`. The scripts are independently usable from any PowerShell 7+ context.
@@ -392,6 +456,8 @@ The composite actions are thin shells over PowerShell scripts in `scripts/`. The
 | [`scripts/dependency-track/Remove-DTStaleChildren.ps1`](scripts/dependency-track/Remove-DTStaleChildren.ps1) | Prune old child projects under a parent. |
 | [`scripts/dependency-track/Wait-DTBomProcessing.ps1`](scripts/dependency-track/Wait-DTBomProcessing.ps1) | Poll DT until a BOM upload finishes processing, or fail on timeout. |
 | [`scripts/release-please/Invoke-ReleasePlease.ps1`](scripts/release-please/Invoke-ReleasePlease.ps1) | Mint a GitHub App installation token, then run `release-please github-release` and `release-pr` at a pinned version, one retry each. |
+| [`scripts/nuget/Set-AdoNuGetSource.ps1`](scripts/nuget/Set-AdoNuGetSource.ps1) | Register Azure DevOps NuGet feeds as dotnet sources with a token. Refuses any host outside Azure DevOps. |
+| [`scripts/nuget/Remove-AdoNuGetSource.ps1`](scripts/nuget/Remove-AdoNuGetSource.ps1) | Remove the sources that `Set-AdoNuGetSource.ps1` registered. |
 
 Private (internal) helper:
 

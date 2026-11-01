@@ -1,0 +1,27 @@
+parameters:
+  - name: scriptsDir
+    displayName: Path to the pipeline-tools scripts/ directory after checkout.
+    type: string
+  - name: sourceName
+    displayName: Name given to ado-nuget-auth. Removes <sourceName>, <sourceName>-2, and so on.
+    type: string
+    default: ado
+  - name: configFile
+    displayName: Path of the NuGet.Config given to ado-nuget-auth. Empty means the user-level config.
+    type: string
+    default: ''
+  - name: displayName
+    displayName: Pipeline UI label for the generated step.
+    type: string
+    default: Remove Azure DevOps NuGet sources
+
+steps:
+  - pwsh: |
+      $params = @{ SourceName = $env:SOURCE_NAME }
+      if ($env:CONFIG_FILE) { $params.ConfigFile = $env:CONFIG_FILE }
+      & "${{ parameters.scriptsDir }}/nuget/Remove-AdoNuGetSource.ps1" @params
+    env:
+      SOURCE_NAME: ${{ parameters.sourceName }}
+      CONFIG_FILE: ${{ parameters.configFile }}
+    displayName: ${{ parameters.displayName }}
+    condition: always()
