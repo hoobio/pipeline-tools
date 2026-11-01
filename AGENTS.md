@@ -102,5 +102,5 @@ A PR that adds something to one platform without the other is incomplete. Review
 
 - PowerShell for all scripts.
 - 2-space YAML indentation.
-- Conventional Commits (no AB# suffix; this is not a Nintex repo).
+- Conventional Commits (no AB# suffix).
 - No emoji / no gitmoji in commit messages or PR titles.
